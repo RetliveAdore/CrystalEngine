@@ -2,8 +2,8 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 21:36:50
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-08-28 19:30:47
- * @FilePath: \CrystalMods\src\CrystalGraphic\vk.c
+ * @LastEditTime: 2024-08-28 22:18:06
+ * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
@@ -82,7 +82,9 @@ void _inner_init_vk_()
     CR_VKINIT.physical_device = pDevice[0];
     VkPhysicalDeviceProperties prop;
     vkGetPhysicalDeviceProperties(CR_VKINIT.physical_device, &prop);
-    CR_LOG_IFO("auto", "Default graphic card: %s", prop.deviceName);
+    CRUINT32 extensionCounts = 0;
+    vkEnumerateInstanceExtensionProperties(NULL, &extensionCounts, NULL);
+    CR_LOG_IFO("auto", "Default graphic card: %s, %d extensions supported", prop.deviceName, extensionCounts);
     CRAlloc(pDevice, 0);
 }
 

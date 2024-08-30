@@ -30,6 +30,13 @@ OBJ_FILES_CORE := $(patsubst core\\%.c,out\objs\core\\%.o,$(C_FILES_CORE))
 SHADER_FILES := $(shell powershell Get-ChildItem -Recurse -Filter "*.glsl" -Path . -Name)
 OBJ_SHADER_FILES := $(patsubst %.glsl,out\objs\\%.o,$(SHADER_FILES))
 
+VERTSHADER_FILES := $(shell powershell Get-ChildItem -Recurse -Filter "*.vert" -Path . -Name)
+VERTSPV_SHADER_FILES := $(patsubst %.vert,out\objs\\%.vert.spv,$(VERTSHADER_FILES))
+VERTOBJ_SHADER_FILES := $(patsubst %.spv,%.ov,$(VERTSPV_SHADER_FILES))
+
+FRAGSHADER_FILES := $(shell powershell Get-ChildItem -Recurse -Filter "*.frag" -Path . -Name)
+FRAGSPV_SHADER_FILES := $(patsubst %.frag,out\objs\\%.frag.spv,$(FRAGSHADER_FILES))
+FRAGOBJ_SHADER_FILES := $(patsubst %.spv,%.of,$(FRAGSPV_SHADER_FILES))
 
 C_MOD_FILES_CORE := $(filter src\CrystalCore\\%.c,$(C_FILES_MOD))
 C_MOD_FILES_ALG := $(filter src\CrystalAlgorithms\\%.c,$(C_FILES_MOD))
@@ -73,9 +80,21 @@ clean:
 
 debug:
 	@echo ===========
-	@echo $(OBJ_CORE_FILES_CORE)
-	@echo $(OBJ_FILES_CORE)
+	@echo $(VERTSPV_SHADER_FILES)
+	@echo $(VERTOBJ_SHADER_FILES)
 	@echo ===========
+
+out\objs\shader\\%.vert.spv : shader\\%.vert
+	.\platform\windows\glslc.exe $^ -o $@
+
+out\objs\shader\\%.frag.spv : shader\\%.frag
+	.\platform\windows\glslc.exe $^ -o $@
+
+out\objs\shader\\%.vert.ov : out\objs\shader\\%.vert.spv
+	@ld -r -b binary $^ -o $@
+
+out\objs\shader\\%.frag.of : out\objs\shader\\%.frag.spv
+	@ld -r -b binary $^ -o $@
 
 out\objs\shader\\%.o : shader\\%.glsl
 	@ld -r -b binary $^ -o $@
@@ -99,9 +118,9 @@ audio : $(OBJ_MOD_FILES_AUDIO) $(OBJ_CORE_FILES_AUDIO)
 	@ar rcs out/Windows/libCrystalAudio.a $(OBJ_CORE_FILES_AUDIO)
 	@gcc -shared -o out/Windows/CrystalAudio.so $(OBJ_MOD_FILES_AUDIO) $(INCLUDE_PATH) $(LIBRARIES)
 
-graphic : $(OBJ_MOD_FILES_GRC) $(OBJ_CORE_FILES_GRC) $(OBJ_SHADER_FILES)
+graphic : $(OBJ_MOD_FILES_GRC) $(OBJ_CORE_FILES_GRC) $(OBJ_SHADER_FILES) $(VERTOBJ_SHADER_FILES) $(FRAGOBJ_SHADER_FILES)
 	@ar rcs out/Windows/libCrystalGraphic.a $(OBJ_CORE_FILES_GRC)
-	@gcc -shared -o out/Windows/CrystalGraphic.so $(OBJ_MOD_FILES_GRC) $(OBJ_SHADER_FILES) $(INCLUDE_PATH) $(LIBRARIES)
+	@gcc -shared -o out/Windows/CrystalGraphic.so $(OBJ_MOD_FILES_GRC) $(OBJ_SHADER_FILES) $(VERTOBJ_SHADER_FILES) $(FRAGOBJ_SHADER_FILES) $(INCLUDE_PATH) $(LIBRARIES)
 
 build : clean core algorithms thread audio graphic
 	@gcc -o out/Windows/app.exe $(APP_FILES) $(INCLUDE_PATH) -L.\out\Windows $(APP_DEPENDS)

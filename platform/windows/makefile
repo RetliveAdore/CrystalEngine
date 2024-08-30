@@ -85,10 +85,10 @@ debug:
 	@echo ===========
 
 out\objs\shader\\%.vert.spv : shader\\%.vert
-	.\platform\windows\glslc.exe $^ -o $@
+	@.\platform\windows\glslc.exe $^ -o $@
 
 out\objs\shader\\%.frag.spv : shader\\%.frag
-	.\platform\windows\glslc.exe $^ -o $@
+	@.\platform\windows\glslc.exe $^ -o $@
 
 out\objs\shader\\%.vert.ov : out\objs\shader\\%.vert.spv
 	@ld -r -b binary $^ -o $@
@@ -125,7 +125,7 @@ graphic : $(OBJ_MOD_FILES_GRC) $(OBJ_CORE_FILES_GRC) $(OBJ_SHADER_FILES) $(VERTO
 build : clean core algorithms thread audio graphic
 	@gcc -o out/Windows/app.exe $(APP_FILES) $(INCLUDE_PATH) -L.\out\Windows $(APP_DEPENDS)
 
-run : build
+run :
 	@.\out\Windows\app.exe
 
 .PHONY: debug core algorithms thread audio graphic shader build run

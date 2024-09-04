@@ -2,18 +2,43 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 21:36:50
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-08-28 22:18:06
+ * @LastEditTime: 2024-09-04 20:27:34
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
 #include "vk.h"
 
+#ifdef NDEBUG
+const int enableValidationLayers = 0;
+#else
+const int enableValidationLayers = 1;
+#endif
+const char* validation_layer_name[] = {"VK_LAYER_KHRONOS_validation"};
+
+static VKAPI_ATTR VkBool32 VKAPI_CALL _inner_debug_callback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT messageType,
+    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
+    void* pUserData
+)
+{
+    CR_LOG_WAR("auto", "validation layer: %s", pCallbackData->pMessage);
+    return VK_FALSE;
+}
+
+const char* device_extensions[] = {
+        VK_KHR_SWAPCHAIN_EXTENSION_NAME
+};
+
 //单例，每个进程只需要初始化一次
 static struct vk_init
 {
     VkInstance instance;
     VkPhysicalDevice physical_device;
+    CRUINT32 queue_family_count;
+    CRUINT32 graphics_family_index;
+    VkDebugUtilsMessengerEXT debugMessenger;
 }CR_VKINIT;
 
 //实例，每个进程可以创建多个
@@ -21,6 +46,7 @@ typedef struct vk_struct
 {
     VkSurfaceKHR surface;
     VkDevice device;
+    CRUINT32 present_family_index;
     struct{
         VkSwapchainKHR swapchain;
         CRUINT32 image_count;
@@ -35,6 +61,22 @@ typedef struct vk_struct
     #endif
 }CR_VKSTRUCT, *PCR_VKSTRUCT;
 
+#ifdef CR_WINDOWS
+static CRUINT32 extensionCountB = 2;
+static const char* extensionsB[2] = {
+    VK_KHR_SURFACE_EXTENSION_NAME,
+    VK_KHR_WIN32_SURFACE_EXTENSION_NAME
+};
+#elif defined CR_LINUX
+static CRUINT32 extensionCount = 2;
+static const char* extensions[2] = {
+    VK_KHR_SURFACE_EXTENSION_NAME,
+    VK_KHR_XLIB_SURFACE_EXTENSION_NAME
+};
+#endif
+static const char** extensions = NULL;
+static uint32_t extensionCount = 0;
+
 static void _inner_device_initialization_()
 {
     VkApplicationInfo appInfo = {0};
@@ -42,29 +84,57 @@ static void _inner_device_initialization_()
     appInfo.pApplicationName = "CrystalVulkan";
     appInfo.pEngineName = "No Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_0;
+    appInfo.apiVersion = VK_API_VERSION_1_2;
     //
-    #ifdef CR_WINDOWS
-    CRUINT32 extensionCount = 2;
-    const char* extensions[2] = {
-        "VK_KHR_surface",
-        "VK_KHR_win32_surface"
-    };
-    #elif defined CR_LINUX
-    CRUINT32 extensionCount = 2;
-    const char* extensions[2] = {
-        "VK_KHR_surface",
-        "VK_KHR_xlib_surface"
-    };
-    #endif
+    if (enableValidationLayers) {
+        extensionCount = extensionCountB + 1;
+        extensions = (const char**)CRAlloc(NULL, sizeof(const char*) * extensionCount);
+        for (int i = 0; i < extensionCountB; i++) {
+            extensions[i] = extensionsB[i];
+        }
+        extensions[extensionCount - 1] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    } else {
+        extensionCount = extensionCountB;
+        extensions = extensionsB;
+    }
+
     VkInstanceCreateInfo instanceCreateInfo = {0};
     instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instanceCreateInfo.pApplicationInfo = &appInfo;
     instanceCreateInfo.enabledExtensionCount = extensionCount;
     instanceCreateInfo.ppEnabledExtensionNames = extensions;
-    instanceCreateInfo.enabledLayerCount = 0;
+    if (enableValidationLayers)
+    {
+        VkDebugUtilsMessengerCreateInfoEXT debug_create_info = {0};
+        debug_create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        debug_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debug_create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        debug_create_info.pfnUserCallback = _inner_debug_callback;
+
+        instanceCreateInfo.enabledLayerCount = 1;
+        instanceCreateInfo.ppEnabledLayerNames = validation_layer_name;
+        instanceCreateInfo.pNext = &debug_create_info;
+    }
+    else
+    {
+        instanceCreateInfo.enabledLayerCount = 0;
+    }
     if (vkCreateInstance(&instanceCreateInfo, NULL, &(CR_VKINIT.instance)) != VK_SUCCESS)
-    CR_LOG_ERR("auto", "failed to create instance!");
+        CR_LOG_ERR("auto", "failed to create instance!");
+    // setup debug messenger
+    if (enableValidationLayers) {
+        VkDebugUtilsMessengerCreateInfoEXT debug_create_info = {0};
+        debug_create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+        debug_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        debug_create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        debug_create_info.pfnUserCallback = _inner_debug_callback;
+
+        PFN_vkCreateDebugUtilsMessengerEXT func = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(CR_VKINIT.instance, "vkCreateDebugUtilsMessengerEXT");
+        if (func == NULL)
+            CR_LOG_WAR("auto", "vkCreateDebugUtilsMessengerEXT not found!");
+        else if (func(CR_VKINIT.instance, &debug_create_info, NULL, &(CR_VKINIT.debugMessenger)) != VK_SUCCESS)
+            CR_LOG_WAR("auto", "failed to set up debug messenger!");
+    }
 }
 
 void _inner_init_vk_()
@@ -85,13 +155,77 @@ void _inner_init_vk_()
     CRUINT32 extensionCounts = 0;
     vkEnumerateInstanceExtensionProperties(NULL, &extensionCounts, NULL);
     CR_LOG_IFO("auto", "Default graphic card: %s, %d extensions supported", prop.deviceName, extensionCounts);
+    //检查是否支持图形命令队列
+    CR_VKINIT.queue_family_count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(CR_VKINIT.physical_device, &(CR_VKINIT.queue_family_count), NULL);
+    VkQueueFamilyProperties *pQueueProp = CRAlloc(NULL, sizeof(VkQueueFamilyProperties) * CR_VKINIT.queue_family_count);
+    vkGetPhysicalDeviceQueueFamilyProperties(CR_VKINIT.physical_device, &(CR_VKINIT.queue_family_count), pQueueProp);
+    for (int i = 0; i < CR_VKINIT.queue_family_count; i++)
+    {
+        if (pQueueProp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        {
+            CR_VKINIT.graphics_family_index = i;
+            goto Success;
+        } 
+    }
+Failed:
+    CR_LOG_WAR("auto", "failed to found graphics family index");
+Success:
+    CRAlloc(pQueueProp, 0);
     CRAlloc(pDevice, 0);
 }
 
 void _inner_uninit_vk_()
 {
+    if (enableValidationLayers)
+    {
+        PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(CR_VKINIT.instance, "vkDestroyDebugUtilsMessengerEXT");
+        if (func != NULL) func(CR_VKINIT.instance, CR_VKINIT.debugMessenger, NULL);
+    }
     vkDestroyInstance(CR_VKINIT.instance, NULL);
     CR_VKINIT.instance = VK_NULL_HANDLE;
+    if (enableValidationLayers)
+        CRAlloc(extensions, 0);
+}
+
+static void _inner_create_logical_device_(PCR_VKSTRUCT pInner)
+{
+    float queuePriority = 1.0f;
+    VkPhysicalDeviceFeatures device_features = {0};
+    VkDeviceCreateInfo device_create_info = {0};
+    device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    VkDeviceQueueCreateInfo queue_create_infos[2] = {
+        {0},
+        {0},
+    };
+    queue_create_infos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue_create_infos[0].queueFamilyIndex = CR_VKINIT.graphics_family_index;
+    queue_create_infos[0].queueCount = 1;
+    queue_create_infos[0].pQueuePriorities = &queuePriority;
+    queue_create_infos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queue_create_infos[1].queueFamilyIndex = pInner->present_family_index;
+    queue_create_infos[1].queueCount = 1;
+    queue_create_infos[1].pQueuePriorities = &queuePriority;
+    //
+    if (CR_VKINIT.graphics_family_index != pInner->present_family_index)
+        device_create_info.queueCreateInfoCount = 2;
+    else
+        device_create_info.queueCreateInfoCount = 1;
+    device_create_info.pQueueCreateInfos = queue_create_infos;
+    device_create_info.enabledExtensionCount = 1;
+    device_create_info.ppEnabledExtensionNames = device_extensions;
+    if (enableValidationLayers)
+    {
+        device_create_info.enabledLayerCount = 1;
+        device_create_info.ppEnabledLayerNames = validation_layer_name;
+    }
+    else
+    {
+        device_create_info.enabledLayerCount = 0;
+    }
+    device_create_info.pEnabledFeatures = &device_features;
+    if (vkCreateDevice(CR_VKINIT.physical_device, &device_create_info, NULL, &(pInner->device)) != VK_SUCCESS)
+        CR_LOG_WAR("auto", "failed to create logical device!");
 }
 
 #ifdef CR_WINDOWS
@@ -114,7 +248,24 @@ cr_vk _inner_create_vk_(HWND hWnd)
         CRAlloc(pInner, 0);
         return NULL;
     }
-    CR_LOG_DBG("auto", "create surface success");
+    //
+    //检查窗口表面支持
+    VkBool32 present_support = 0;
+    for (int i = 0; i < CR_VKINIT.queue_family_count; i++)
+    {
+        vkGetPhysicalDeviceSurfaceSupportKHR(CR_VKINIT.physical_device, i, pInner->surface, &present_support);
+        if (present_support)
+        {
+            pInner->present_family_index = i;
+            goto Success;
+        }
+    }
+Failed:
+    CR_LOG_WAR("auto", "failed to found present family index");
+Success:
+    //创建逻辑设备
+    _inner_create_logical_device_(pInner);
+    //
     //
     return pInner;
 }
@@ -139,7 +290,24 @@ cr_vk _inner_create_vk_(Display* dpy, Window win)
         CRAlloc(pInner, 0);
         return NULL;
     }
-    CR_LOG_DBG("auto", "create surface success");
+    //
+    //检查窗口表面支持
+    VkBool32 present_support = 0;
+    for (int i = 0; i < CR_VKINIT.queue_family_count; i++)
+    {
+        vkGetPhysicalDeviceSurfaceSupportKHR(CR_VKINIT.physical_device, i, pInner->surface, &present_support);
+        if (present_support)
+        {
+            pInner->present_family_index = i;
+            goto Success;
+        }
+    }
+Failed:
+    CR_LOG_WAR("auto", "failed to found present family index");
+Success:
+    //创建逻辑设备
+    _inner_create_logical_device_(pInner);
+    //
     //
     return pInner;
 }

@@ -9,6 +9,8 @@
  */
 #include "vk.h"
 
+//虚拟机中不支持调试层扩展
+#define NDEBUG
 #ifdef NDEBUG
 const int enableValidationLayers = 0;
 #else
@@ -68,8 +70,8 @@ static const char* extensionsB[2] = {
     VK_KHR_WIN32_SURFACE_EXTENSION_NAME
 };
 #elif defined CR_LINUX
-static CRUINT32 extensionCount = 2;
-static const char* extensions[2] = {
+static CRUINT32 extensionCountB = 2;
+static const char* extensionsB[2] = {
     VK_KHR_SURFACE_EXTENSION_NAME,
     VK_KHR_XLIB_SURFACE_EXTENSION_NAME
 };
@@ -165,12 +167,12 @@ void _inner_init_vk_()
         if (pQueueProp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
         {
             CR_VKINIT.graphics_family_index = i;
-            goto Success;
+            goto CRSuccess;
         } 
     }
 Failed:
     CR_LOG_WAR("auto", "failed to found graphics family index");
-Success:
+CRSuccess:
     CRAlloc(pQueueProp, 0);
     CRAlloc(pDevice, 0);
 }
@@ -299,12 +301,12 @@ cr_vk _inner_create_vk_(Display* dpy, Window win)
         if (present_support)
         {
             pInner->present_family_index = i;
-            goto Success;
+            goto CRSuccess;
         }
     }
 Failed:
     CR_LOG_WAR("auto", "failed to found present family index");
-Success:
+CRSuccess:
     //创建逻辑设备
     _inner_create_logical_device_(pInner);
     //

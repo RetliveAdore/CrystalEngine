@@ -2,13 +2,12 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-24 16:15:22
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-06-24 16:15:28
- * @FilePath: \Crystal-Graphic\src\linux.c
+ * @LastEditTime: 2024-09-06 20:51:13
+ * @FilePath: \CrystalEngine\src\CrystalGraphic\linux.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
 #include <GraphicDfs.h>
-#include "crgl.h"
 #include "vk.h"
 
 #ifdef CR_LINUX

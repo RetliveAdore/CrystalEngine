@@ -2,8 +2,8 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-23 00:42:19
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-08-15 23:29:46
- * @FilePath: \CrystalGraphic\src\init.c
+ * @LastEditTime: 2024-09-06 20:51:54
+ * @FilePath: \CrystalEngine\src\CrystalGraphic\init.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
@@ -51,9 +51,6 @@ extern CRBOOL _inner_x_init_();
 extern void _inner_x_uninit_();
 #endif
 
-extern void _inner_init_gl_();
-extern void _inner_uninit_gl_();
-
 CRAPI CRBOOL CRModInit(void **ptr)
 {
     if (ptr[0] == ptr[1])
@@ -65,7 +62,6 @@ CRAPI CRBOOL CRModInit(void **ptr)
     #elif defined CR_LINUX
     back = _inner_x_init_();
     #endif
-    _inner_init_gl_();
     _inner_init_vk_();
     return back;
 }
@@ -77,7 +73,6 @@ CRAPI void CRModUninit(void)
     #elif defined CR_LINUX
     _inner_x_uninit_();
     #endif
-    _inner_uninit_gl_();
     _inner_uninit_vk_();
     if (lock) CRLockRelease(lock);
 }

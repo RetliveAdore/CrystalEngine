@@ -2,13 +2,12 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-23 00:38:41
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-08-28 19:47:58
- * @FilePath: \CrystalMods\src\CrystalGraphic\windows.c
+ * @LastEditTime: 2024-09-06 20:55:02
+ * @FilePath: \CrystalEngine\src\CrystalGraphic\windows.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
 #include <GraphicDfs.h>
-#include "crgl.h"
 #include "vk.h"
 
 #ifdef CR_WINDOWS
@@ -25,7 +24,6 @@ typedef struct crwindow_inner
     CRUINT32 fps;
     PCRWindowProperties prop;
     CRPOINTU cursor;
-    CR_GL* pgl_ui;
     cr_vk vkui;
     cr_vk vkpaint;
     //
@@ -58,7 +56,6 @@ static LRESULT AfterProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, PCRW
     switch (msg)
     {
         case WM_PAINT:
-            _inner_cr_gl_paint_ui_(pInner->pgl_ui);
             break;
         case WM_MOUSEMOVE:
             if (inf.y > 0)
@@ -128,8 +125,6 @@ static LRESULT AfterProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, PCRW
                 return 0;
             break;
         case WM_SIZE:
-            _inner_set_size_(pInner->pgl_ui, inf.w, inf.h);
-            _inner_cr_gl_resize_(pInner->pgl_ui);
             pInner->w = inf.w;
             pInner->h = inf.h;
             pInner->resized = CRTRUE;
@@ -154,8 +149,6 @@ LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         LPCREATESTRUCT lpcs = (LPCREATESTRUCT)lParam;
         SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)(lpcs->lpCreateParams));
         pInner = lpcs->lpCreateParams;
-        pInner->pgl_ui = _inner_create_cr_gl_ui_(GetDC(hWnd));
-        CR_LOG_IFO("auto", "OpenGL Version: %s", pInner->pgl_ui->glGetString(GL_VERSION));
         return 0;
     }
     pInner = (PCRWINDOWINNER)(CRUINT64)GetWindowLongPtr(hWnd, GWLP_USERDATA);
@@ -172,7 +165,6 @@ LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)NULL);
         pInner->onProcess = CRFALSE;
-        _inner_delete_cr_gl_(pInner->pgl_ui);
         return DefWindowProc(hWnd, msg, wParam, lParam);
     }
     return AfterProc(hWnd, msg, wParam, lParam, pInner);
@@ -184,9 +176,11 @@ static void _inner_paint_thread_(CRLVOID data, CRTHREAD idThis);
 static void _inner_window_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = data;
+    DWORD style = WS_POPUP;
+    style = WS_OVERLAPPEDWINDOW;
     pInner->hWnd = CreateWindow(
         CR_WNDCLASS_NAME,
-        pInner->prop->title, WS_POPUP,
+        pInner->prop->title, style,
         pInner->prop->x, pInner->prop->y,
         pInner->prop->w, pInner->prop->h,
         NULL, NULL, GetModuleHandle(NULL), pInner
@@ -230,7 +224,7 @@ static void _inner_paint_ui_thread_(CRLVOID data, CRTHREAD idThis)
 static void _inner_paint_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = (PCRWINDOWINNER)data;
-    pInner->vkpaint = _inner_create_vk_(pInner->hWnd);
+    pInner->vkpaint = _inner_create_vk_(pInner->hWnd, pInner->w, pInner->h);
     while (pInner->onProcess)
     {
         CRSleep(1);
@@ -263,7 +257,6 @@ CRAPI void CRCreateWindow(PCRWindowProperties prop)
     pInner->onProcess = CRTRUE;
     pInner->preClose = CRFALSE;
     pInner->prop = prop;
-    pInner->pgl_ui = NULL;
     pInner->vkui = NULL;
     pInner->vkpaint = NULL;
     pInner->w = prop->w;

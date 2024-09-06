@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 21:36:50
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-04 20:27:34
+ * @LastEditTime: 2024-09-06 22:37:04
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -10,7 +10,7 @@
 #include "vk.h"
 
 //虚拟机中不支持调试层扩展
-#define NDEBUG
+//#define NDEBUG
 #ifdef NDEBUG
 const int enableValidationLayers = 0;
 #else
@@ -54,6 +54,12 @@ typedef struct vk_struct
         CRUINT32 image_count;
         VkFormat image_format;
         VkColorSpaceKHR color_space;
+        VkImageUsageFlags image_usage_flags;
+        VkExtent2D extent;
+        CRUINT32 requested_min_image_count;
+        VkPresentModeKHR present_mode;
+        VkImage *swapchain_images;
+        VkImageView *swapchain_image_views;
     }swapchain;
     #ifdef CR_WINDOWS
     HWND hWnd;
@@ -67,7 +73,7 @@ typedef struct vk_struct
 static CRUINT32 extensionCountB = 2;
 static const char* extensionsB[2] = {
     VK_KHR_SURFACE_EXTENSION_NAME,
-    VK_KHR_WIN32_SURFACE_EXTENSION_NAME
+    VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 };
 #elif defined CR_LINUX
 static CRUINT32 extensionCountB = 2;
@@ -190,6 +196,24 @@ void _inner_uninit_vk_()
         CRAlloc(extensions, 0);
 }
 
+//
+//
+//////////
+//
+
+static void _inner_init_data_(PCR_VKSTRUCT pInner, CRUINT32 w, CRUINT32 h)
+{
+    pInner->swapchain.swapchain = VK_NULL_HANDLE;
+    pInner->swapchain.image_count = 0;
+    pInner->swapchain.image_format = VK_FORMAT_B8G8R8A8_SRGB;
+    pInner->swapchain.color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    pInner->swapchain.image_usage_flags = 0;
+    pInner->swapchain.extent.width = w;
+    pInner->swapchain.extent.height = h;
+    pInner->swapchain.requested_min_image_count = 0;
+    pInner->swapchain.present_mode = VK_PRESENT_MODE_FIFO_KHR;
+}
+
 static void _inner_create_logical_device_(PCR_VKSTRUCT pInner)
 {
     float queuePriority = 1.0f;
@@ -230,8 +254,102 @@ static void _inner_create_logical_device_(PCR_VKSTRUCT pInner)
         CR_LOG_WAR("auto", "failed to create logical device!");
 }
 
+static void _inner_create_swapchain_(PCR_VKSTRUCT pInner)
+{
+    VkSurfaceCapabilitiesKHR capabilities;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(CR_VKINIT.physical_device, pInner->surface, &capabilities);
+    pInner->swapchain.image_count = capabilities.minImageCount + 1;
+    //对图像数量进行校正
+    if (capabilities.maxImageCount > 0 &&pInner->swapchain.image_count > capabilities.maxImageCount)
+        pInner->swapchain.image_count = capabilities.maxImageCount;
+    //
+    VkSwapchainCreateInfoKHR swapchain_create_info = {
+        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
+        .pNext = NULL,
+        .flags = 0,
+        .surface = pInner->surface,
+        .minImageCount = pInner->swapchain.image_count,
+        .imageFormat = pInner->swapchain.image_format,
+        .imageColorSpace = pInner->swapchain.color_space,
+        .imageExtent = pInner->swapchain.extent,
+        .imageArrayLayers = 1,
+        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+        .preTransform = capabilities.currentTransform,
+        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+        .presentMode = pInner->swapchain.present_mode,
+        .clipped = VK_TRUE,
+        .oldSwapchain = VK_NULL_HANDLE
+    };
+    CRUINT32 queue_family_indicies[] = { CR_VKINIT.graphics_family_index, pInner->present_family_index};
+    swapchain_create_info.pQueueFamilyIndices = queue_family_indicies;
+    if (queue_family_indicies[0] != queue_family_indicies[1])
+    {
+        swapchain_create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+        swapchain_create_info.queueFamilyIndexCount = 2;
+    }
+    else
+    {
+        swapchain_create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        swapchain_create_info.queueFamilyIndexCount = 1;
+    }
+    if (swapchain_create_info.imageExtent.width < capabilities.minImageExtent.width || swapchain_create_info.imageExtent.height < capabilities.minImageExtent.height)
+    {
+        swapchain_create_info.imageExtent.width = capabilities.minImageExtent.width;
+        swapchain_create_info.imageExtent.height = capabilities.minImageExtent.height;
+    }
+    else if (swapchain_create_info.imageExtent.width > capabilities.maxImageExtent.width || swapchain_create_info.imageExtent.height > capabilities.maxImageExtent.height)
+    {
+        swapchain_create_info.imageExtent.width = capabilities.maxImageExtent.width;
+        swapchain_create_info.imageExtent.height = capabilities.maxImageExtent.height;
+    }
+    if (vkCreateSwapchainKHR(pInner->device, &swapchain_create_info, NULL, &(pInner->swapchain.swapchain)) != VK_SUCCESS)
+        CR_LOG_WAR("auto", "failed to create swap chain!");
+
+    vkGetSwapchainImagesKHR(pInner->device, pInner->swapchain.swapchain, &(pInner->swapchain.image_count), NULL);
+    pInner->swapchain.swapchain_images = (VkImage*)CRAlloc(NULL, sizeof(VkImage) * pInner->swapchain.image_count);
+    vkGetSwapchainImagesKHR(pInner->device, pInner->swapchain.swapchain, &(pInner->swapchain.image_count), pInner->swapchain.swapchain_images);
+    
+    pInner->swapchain.swapchain_image_views = (VkImageView*)CRAlloc(NULL, sizeof(VkImageView) * pInner->swapchain.image_count);
+    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
+    {
+        VkImageViewCreateInfo image_view_create_infos =
+        {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .image = pInner->swapchain.swapchain_images[i],
+            .viewType = VK_IMAGE_TYPE_2D,
+            .format = pInner->swapchain.image_format,
+            //
+            .components.r = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .components.g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .components.b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .components.a = VK_COMPONENT_SWIZZLE_IDENTITY,
+            //
+            .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .subresourceRange.baseMipLevel = 0,
+            .subresourceRange.levelCount = 1,
+            .subresourceRange.baseArrayLayer = 0,
+            .subresourceRange.layerCount = 1
+        };
+        if (vkCreateImageView(pInner->device, &image_view_create_infos, NULL, &(pInner->swapchain.swapchain_image_views[i])) != VK_SUCCESS)
+            CR_LOG_WAR("auto", "failed to create image views!");
+    }
+}
+
+/**
+ * create device -
+ * create swapchain -
+ * get queues
+ * create render pass
+ * create graphics pipline
+ * create frame buffers
+ * create command pool
+ * create command buffers
+ * create sync objects
+ */
 #ifdef CR_WINDOWS
-cr_vk _inner_create_vk_(HWND hWnd)
+cr_vk _inner_create_vk_(HWND hWnd, CRUINT32 w, CRUINT32 h)
 {
     PCR_VKSTRUCT pInner = CRAlloc(NULL, sizeof(CR_VKSTRUCT));
     if (!pInner)
@@ -242,8 +360,10 @@ cr_vk _inner_create_vk_(HWND hWnd)
     pInner->hWnd = hWnd;
     VkWin32SurfaceCreateInfoKHR createInfo;
     createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    createInfo.hwnd = pInner->hWnd;
+    createInfo.pNext = NULL;
+    createInfo.flags = 0;
     createInfo.hinstance = GetModuleHandle(NULL);
+    createInfo.hwnd = pInner->hWnd;
     if (vkCreateWin32SurfaceKHR(CR_VKINIT.instance, &createInfo, NULL, &(pInner->surface)) != VK_SUCCESS)
     {
         CR_LOG_WAR("auto", "failed to create surface");
@@ -267,12 +387,14 @@ Failed:
 Success:
     //创建逻辑设备
     _inner_create_logical_device_(pInner);
-    //
+    //创建交换链
+    _inner_init_data_(pInner, w, h);
+    _inner_create_swapchain_(pInner);
     //
     return pInner;
 }
 #elif defined CR_LINUX
-cr_vk _inner_create_vk_(Display* dpy, Window win)
+cr_vk _inner_create_vk_(Display* dpy, Window win, CRUINT32 w, CRUINT32 h)
 {
     PCR_VKSTRUCT pInner = CRAlloc(NULL, sizeof(CR_VKSTRUCT));
     if (!pInner)
@@ -318,6 +440,11 @@ CRSuccess:
 void _inner_release_vk_(cr_vk vk)
 {
     PCR_VKSTRUCT pInner = (PCR_VKSTRUCT)vk;
+    //
+    for (int i = 0; i < pInner->swapchain.image_count; i++)
+        vkDestroyImageView(pInner->device, pInner->swapchain.swapchain_image_views[i], NULL);
+    CRAlloc(pInner->swapchain.swapchain_image_views, 0);
+    vkDestroySwapchainKHR(pInner->device, pInner->swapchain.swapchain, NULL);
     vkDestroyDevice(pInner->device, NULL);
     vkDestroySurfaceKHR(CR_VKINIT.instance, pInner->surface, NULL);
 }

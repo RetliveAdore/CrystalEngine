@@ -2,8 +2,8 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 22:07:38
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-08-28 19:01:24
- * @FilePath: \CrystalMods\src\CrystalGraphic\vk.h
+ * @LastEditTime: 2024-09-04 21:17:26
+ * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.h
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
@@ -25,9 +25,9 @@ void _inner_init_vk_();
 void _inner_uninit_vk_();
 
 #ifdef CR_WINDOWS
-cr_vk _inner_create_vk_(HWND hWnd);
+cr_vk _inner_create_vk_(HWND hWnd, CRUINT32 w, CRUINT32 h);
 #elif defined CR_LINUX
-cr_vk _inner_create_vk_(Display *dpy, Window win);
+cr_vk _inner_create_vk_(Display *dpy, Window win, CRUINT32 w, CRUINT32 h);
 #endif
 
 void _inner_release_vk_(cr_vk vk);

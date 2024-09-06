@@ -431,7 +431,9 @@ Failed:
 CRSuccess:
     //创建逻辑设备
     _inner_create_logical_device_(pInner);
-    //
+    //创建交换链
+    _inner_init_data_(pInner, w, h);
+    _inner_create_swapchain_(pInner);
     //
     return pInner;
 }

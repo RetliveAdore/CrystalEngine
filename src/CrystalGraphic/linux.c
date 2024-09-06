@@ -33,9 +33,9 @@ typedef struct crwindow_inner
     CRUINT32 fps;
     PCRWindowProperties prop;
     CRPOINTU delta;
-    CR_GL* pgl_ui;
     cr_vk vkui;
     cr_vk vkpaint;
+    CRUINT32 w, h;
     //
     XVisualInfo *vi;
     //
@@ -60,7 +60,7 @@ static void _inner_process_msg_(PCRWINDOWINNER pInner)
 {
     CRWINDOWMSG inf;
     XEvent event;
-    while (!pInner->pgl_ui || !pInner->vkpaint) CRSleep(1);
+    while (!pInner->vkpaint) CRSleep(1);
     while (pInner->onProcess)
     {
         inf.window = pInner->win;
@@ -79,8 +79,6 @@ static void _inner_process_msg_(PCRWINDOWINNER pInner)
         case ConfigureNotify:
             inf.w = event.xconfigure.width;
             inf.h = event.xconfigure.height - CRUI_TITLEBAR_PIXEL;
-            _inner_set_size_(pInner->pgl_ui, inf.w, inf.h);
-            _inner_cr_gl_resize_(pInner->pgl_ui);
             break;
         case MotionNotify:
             if (event.xbutton.x < CRUI_TITLEBAR_PIXEL && event.xbutton.y < CRUI_TITLEBAR_PIXEL)
@@ -175,7 +173,7 @@ static void _inner_process_msg_(PCRWINDOWINNER pInner)
                 {
                     XSelectInput(pDisplay, pInner->win, NoEventMask);
                     pInner->onProcess = CRFALSE;
-                    while(pInner->pgl_ui || pInner->vkpaint) CRSleep(1);
+                    while(pInner->vkpaint) CRSleep(1);
                     XFlush(pDisplay);
                     XDestroyWindow(pDisplay, pInner->win);
                 }
@@ -287,23 +285,17 @@ static void _inner_window_thread_(CRLVOID data, CRTHREAD idThis)
 static void _inner_paint_ui_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = (PCRWINDOWINNER)data;
-    pInner->pgl_ui= _inner_create_cr_gl_ui_(pDisplay, pInner->vi, pInner->win);
-    CR_LOG_IFO("auto", "OpenGL Version: %s", pInner->pgl_ui->glGetString(GL_VERSION));
     while (pInner->onProcess)
     {
-        _inner_cr_gl_paint_ui_(pInner->pgl_ui);
         CRSleep(100);
     }
     //释放
-    _inner_delete_cr_gl_(pInner->pgl_ui);
-    pInner->pgl_ui = NULL;
 }
 
 static void _inner_paint_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = (PCRWINDOWINNER)data;
-    while (!pInner->pgl_ui) CRSleep(1);
-    pInner->vkpaint = _inner_create_vk_(pDisplay, pInner->win);
+    pInner->vkpaint = _inner_create_vk_(pDisplay, pInner->win, pInner->w, pInner->h);
     while (pInner->onProcess)
     {
         CRSleep(1);
@@ -338,7 +330,8 @@ CRAPI void CRCreateWindow(PCRWindowProperties prop)
     pInner->drag = CRFALSE;
     pInner->preClose = CRFALSE;
     pInner->prop = prop;
-    pInner->pgl_ui = NULL;
+    pInner->w = prop->w;
+    pInner->h = prop->h;
     pInner->vkui = NULL;
     pInner->vkpaint = NULL;
     pInner->eventThread = CRThread(_inner_window_thread_, pInner);

@@ -10,7 +10,7 @@
 #include "vk.h"
 
 //虚拟机中不支持调试层扩展
-//#define NDEBUG
+#define NDEBUG
 #ifdef NDEBUG
 const int enableValidationLayers = 0;
 #else

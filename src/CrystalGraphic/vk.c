@@ -8,7 +8,7 @@
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
 #include "vk.h"
-#include "resources.h"
+#include <resources.h>
 
 //虚拟机中不支持调试层扩展
 #define NDEBUG

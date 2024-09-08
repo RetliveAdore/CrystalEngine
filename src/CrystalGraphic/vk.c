@@ -2,12 +2,13 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 21:36:50
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-06 22:37:04
+ * @LastEditTime: 2024-09-08 17:36:38
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
 #include "vk.h"
+#include "resources.h"
 
 //虚拟机中不支持调试层扩展
 #define NDEBUG
@@ -61,6 +62,20 @@ typedef struct vk_struct
         VkImage *swapchain_images;
         VkImageView *swapchain_image_views;
     }swapchain;
+    struct{
+        VkQueue graphics_queue;
+        VkQueue present_queue;
+        VkFramebuffer *framebuffers;
+        VkRenderPass render_pass;
+        VkPipelineLayout pipeline_layout;
+        VkPipeline graphics_pipeline;
+        VkCommandPool command_pool;
+        VkCommandBuffer *command_buffers;
+        VkSemaphore *available_semaphores;
+        VkSemaphore *finished_semaphores;
+        VkFence *image_in_flight;
+        size_t current_frame;
+    }data;
     #ifdef CR_WINDOWS
     HWND hWnd;
     #elif defined CR_LINUX
@@ -90,7 +105,7 @@ static void _inner_device_initialization_()
     VkApplicationInfo appInfo = {0};
     appInfo.sType =VK_STRUCTURE_TYPE_APPLICATION_INFO;
     appInfo.pApplicationName = "CrystalVulkan";
-    appInfo.pEngineName = "No Engine";
+    appInfo.pEngineName = "Crystal Engine";
     appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     appInfo.apiVersion = VK_API_VERSION_1_2;
     //
@@ -337,11 +352,235 @@ static void _inner_create_swapchain_(PCR_VKSTRUCT pInner)
     }
 }
 
+static void _inner_get_queues_(PCR_VKSTRUCT pInner)
+{
+    vkGetDeviceQueue(pInner->device, CR_VKINIT.graphics_family_index, 0, &(pInner->data.graphics_queue));
+    vkGetDeviceQueue(pInner->device, pInner->present_family_index, 0, &(pInner->data.present_queue));
+}
+
+//创建图形管线
+static void _inner_create_render_pass_(PCR_VKSTRUCT pInner)
+{
+    VkAttachmentDescription color_attachment = {
+        .flags = 0,
+        .format = pInner->swapchain.image_format,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+    };
+    VkAttachmentReference color_attachment_reference = {
+        .attachment = 0,
+        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+    VkSubpassDescription subpass = {0};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &color_attachment_reference;
+    VkSubpassDependency dependency = {
+        .dependencyFlags = 0,
+        .srcSubpass = VK_SUBPASS_EXTERNAL,
+        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = 0,
+        .dstSubpass = 0,
+        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+    };
+    VkRenderPassCreateInfo renderpass_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .flags = 0,
+        .pNext = NULL,
+        .attachmentCount = 1,
+        .pAttachments = &color_attachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 1,
+        .pDependencies = &dependency
+    };
+    if (vkCreateRenderPass(pInner->device, &renderpass_info, NULL, &(pInner->data.render_pass)) != VK_SUCCESS)
+        CR_LOG_WAR("auto", "failed to create render pass!");
+}
+
+static VkShaderModule _inner_create_shader_module_(VkDevice device, const uint32_t* code, size_t code_size)
+{
+    VkShaderModuleCreateInfo create_info = {0};
+    create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    create_info.codeSize = code_size;
+    create_info.pCode = code;
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(device, &create_info, NULL, &shaderModule) != VK_SUCCESS)
+    {
+        CR_LOG_WAR("auto", "failed to create shader module!");
+        return VK_NULL_HANDLE;
+    }
+    return shaderModule;
+}
+
+static void _inner_create_pipeline_(PCR_VKSTRUCT pInner)
+{
+    CRUINT64 size_vert = (CRUINT64)&_binary_out_objs_shader_defaultshader_vert_spv_size;
+    CRUINT64 size_frag = (CRUINT64)&_binary_out_objs_shader_defaultshader_frag_spv_size;
+    const char* vert_code = &_binary_out_objs_shader_defaultshader_vert_spv_start;
+    const char* frag_code = &_binary_out_objs_shader_defaultshader_frag_spv_start;
+    VkShaderModule vert_module = _inner_create_shader_module_(pInner->device, (const uint32_t*)vert_code, size_vert);
+    VkShaderModule frag_module = _inner_create_shader_module_(pInner->device, (const uint32_t*)frag_code, size_frag);
+
+    VkPipelineShaderStageCreateInfo vert_stage_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .stage = VK_SHADER_STAGE_VERTEX_BIT,
+        .module = vert_module,
+        .pName = "main",
+        .pSpecializationInfo = NULL
+    };
+    VkPipelineShaderStageCreateInfo frag_stage_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = frag_module,
+        .pName = "main",
+        .pSpecializationInfo = NULL
+    };
+    VkPipelineShaderStageCreateInfo shader_stages[] = {vert_stage_info, frag_stage_info};
+    VkPipelineVertexInputStateCreateInfo vertex_input_info = {  //顶点输入设置
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .vertexBindingDescriptionCount = 0,
+        .vertexAttributeDescriptionCount = 0,
+        .pVertexBindingDescriptions = NULL,
+        .pVertexAttributeDescriptions = NULL
+    };
+    VkPipelineInputAssemblyStateCreateInfo input_assembly = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = VK_FALSE
+    };
+    VkViewport viewport = {
+        .x = 0.0f,
+        .y = 0.0f,
+        .width = (float)pInner->swapchain.extent.width,
+        .height = (float)pInner->swapchain.extent.height,
+        .minDepth = 0.0f,
+        .maxDepth = 1.0f
+    };
+    VkRect2D scissor = {  //剪裁：不剪裁，直接输出全部
+        .offset.x = 0,
+        .offset.y = 0,
+        .extent = pInner->swapchain.extent
+    };
+    VkPipelineViewportStateCreateInfo viewport_stat = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .viewportCount = 1,
+        .pViewports = &viewport,
+        .scissorCount = 1,
+        .pScissors = &scissor
+    };
+    VkPipelineRasterizationStateCreateInfo rasterizer = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .depthClampEnable = VK_FALSE,
+        .rasterizerDiscardEnable = VK_FALSE,
+        .polygonMode = VK_POLYGON_MODE_FILL,
+        .lineWidth= 1.0f,
+        .cullMode = VK_CULL_MODE_BACK_BIT,
+        .frontFace = VK_FRONT_FACE_CLOCKWISE,
+        .depthBiasEnable = VK_FALSE,
+        .depthBiasConstantFactor = 0.0f,
+        .depthBiasClamp = 0.0f,
+        .depthBiasSlopeFactor = 0.0f
+    };
+    VkPipelineMultisampleStateCreateInfo multisampling = {  //多重采样，需要抗锯齿时启用
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .sampleShadingEnable = VK_FALSE,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+        .minSampleShading = 1.0f,
+        .pSampleMask = NULL,
+        .alphaToCoverageEnable = VK_FALSE,
+        .alphaToOneEnable = VK_FALSE
+    };
+    VkPipelineColorBlendAttachmentState colorBlendAttachment = {
+        .blendEnable = VK_TRUE,
+        .colorWriteMask = VK_COLOR_COMPONENT_A_BIT | VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,  //采用透明度混合的算法
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,  //
+        .colorBlendOp = VK_BLEND_OP_ADD,  //采用加性混合
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
+        .alphaBlendOp = VK_BLEND_OP_ADD
+    };
+    VkPipelineColorBlendStateCreateInfo color_blending = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .logicOpEnable = VK_FALSE,
+        .logicOp = VK_LOGIC_OP_COPY,
+        .attachmentCount = 1,
+        .pAttachments = &colorBlendAttachment,
+        .blendConstants[0] = 0.0f,
+        .blendConstants[1] = 0.0f,
+        .blendConstants[2] = 0.0f,
+        .blendConstants[3] = 0.0f
+    };
+    VkPipelineLayoutCreateInfo pipeline_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .setLayoutCount = 0,
+        .pushConstantRangeCount = 0
+    };
+    if (vkCreatePipelineLayout(pInner->device, &pipeline_layout_info, NULL, &(pInner->data.pipeline_layout)) != VK_SUCCESS)
+        CR_LOG_WAR("auto", "failed to create pipeline layout");
+    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .dynamicStateCount = 2,
+        .pDynamicStates = dynamic_states
+    };
+    VkGraphicsPipelineCreateInfo pipeline_info = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .stageCount =2,
+        .pStages = shader_stages,
+        .pVertexInputState = &vertex_input_info,
+        .pInputAssemblyState = &input_assembly,
+        .pViewportState = &viewport_stat,
+        .pRasterizationState = &rasterizer,
+        .pMultisampleState = &multisampling,
+        .pColorBlendState = &color_blending,
+        .pDynamicState = &dynamic_info,
+        .layout = pInner->data.pipeline_layout,
+        .renderPass = pInner->data.render_pass,
+        .subpass = 0,
+        .basePipelineHandle = VK_NULL_HANDLE
+    };
+    if (vkCreateGraphicsPipelines(pInner->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &(pInner->data.graphics_pipeline)) != VK_SUCCESS)
+        CR_LOG_WAR("auto", "failed to create graphics pipeline!");
+    //
+    vkDestroyShaderModule(pInner->device, vert_module, NULL);
+    vkDestroyShaderModule(pInner->device, frag_module, NULL);
+}
+
 /**
  * create device -
  * create swapchain -
- * get queues
- * create render pass
+ * get queues -
+ * create render pass -
  * create graphics pipline
  * create frame buffers
  * create command pool
@@ -390,6 +629,11 @@ Success:
     //创建交换链
     _inner_init_data_(pInner, w, h);
     _inner_create_swapchain_(pInner);
+    //获取队列
+    _inner_get_queues_(pInner);
+    //创建图形管线
+    _inner_create_render_pass_(pInner);
+    _inner_create_pipeline_(pInner);
     //
     return pInner;
 }
@@ -434,6 +678,11 @@ CRSuccess:
     //创建交换链
     _inner_init_data_(pInner, w, h);
     _inner_create_swapchain_(pInner);
+    //获取队列
+    _inner_get_queues_(pInner);
+    //创建图形管线
+    _inner_create_render_pass_(pInner);
+    _inner_create_pipeline_(pInner);
     //
     return pInner;
 }
@@ -442,11 +691,17 @@ CRSuccess:
 void _inner_release_vk_(cr_vk vk)
 {
     PCR_VKSTRUCT pInner = (PCR_VKSTRUCT)vk;
-    //
+    //释放管线
+    vkDestroyPipeline(pInner->device, pInner->data.graphics_pipeline, NULL);
+    vkDestroyPipelineLayout(pInner->device, pInner->data.pipeline_layout, NULL);
+    vkDestroyRenderPass(pInner->device, pInner->data.render_pass, NULL);
+    //释放交换链
     for (int i = 0; i < pInner->swapchain.image_count; i++)
         vkDestroyImageView(pInner->device, pInner->swapchain.swapchain_image_views[i], NULL);
     CRAlloc(pInner->swapchain.swapchain_image_views, 0);
+    CRAlloc(pInner->swapchain.swapchain_images, 0);
     vkDestroySwapchainKHR(pInner->device, pInner->swapchain.swapchain, NULL);
+    //释放设备
     vkDestroyDevice(pInner->device, NULL);
     vkDestroySurfaceKHR(CR_VKINIT.instance, pInner->surface, NULL);
 }

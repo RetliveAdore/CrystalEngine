@@ -2,8 +2,8 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-10 18:04:45
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-06-24 02:19:29
- * @FilePath: \CrystalAlgorithms\src\crstructure.c
+ * @LastEditTime: 2024-09-08 13:14:16
+ * @FilePath: \CrystalEngine\src\CrystalAlgorithms\crstructure.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
@@ -1171,7 +1171,6 @@ CRAPI CRBOOL CRLinGet(CRSTRUCTURE lin, CRLVOID* data, CRINT64 seek)
 	if (!pInner->hook)
 	{
 		LeaveCriticalSection(&(pInner->pub.cs));
-		CR_LOG_IFO("auto", "empty list");
 		return CRFALSE;
 	}
 	PLINEARNODE node = pInner->hook;

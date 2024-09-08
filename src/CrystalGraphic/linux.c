@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-24 16:15:22
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-06 20:51:13
+ * @LastEditTime: 2024-09-08 22:19:02
  * @FilePath: \CrystalEngine\src\CrystalGraphic\linux.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -60,7 +60,7 @@ static void _inner_process_msg_(PCRWINDOWINNER pInner)
 {
     CRWINDOWMSG inf;
     XEvent event;
-    while (!pInner->vkpaint) CRSleep(1);
+    while (!pInner->vkui) CRSleep(1);
     while (pInner->onProcess)
     {
         inf.window = pInner->win;
@@ -173,7 +173,7 @@ static void _inner_process_msg_(PCRWINDOWINNER pInner)
                 {
                     XSelectInput(pDisplay, pInner->win, NoEventMask);
                     pInner->onProcess = CRFALSE;
-                    while(pInner->vkpaint) CRSleep(1);
+                    while(pInner->vkui) CRSleep(1);
                     XFlush(pDisplay);
                     XDestroyWindow(pDisplay, pInner->win);
                 }
@@ -285,23 +285,26 @@ static void _inner_window_thread_(CRLVOID data, CRTHREAD idThis)
 static void _inner_paint_ui_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = (PCRWINDOWINNER)data;
+    pInner->vlui= _inner_create_vk_(pDisplay, pInner->win, pInner->w, pInner->h);
     while (pInner->onProcess)
     {
         CRSleep(100);
     }
     //释放
+    _inner_release_vk_(pInner->vkui);
+    pInner->vkui = NULL;
 }
 
 static void _inner_paint_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = (PCRWINDOWINNER)data;
-    pInner->vkpaint = _inner_create_vk_(pDisplay, pInner->win, pInner->w, pInner->h);
+    //pInner->vkpaint = _inner_create_vk_(pDisplay, pInner->win, pInner->w, pInner->h);
     while (pInner->onProcess)
     {
         CRSleep(1);
     }
     //释放
-    _inner_release_vk_(pInner->vkpaint);
+    //_inner_release_vk_(pInner->vkpaint);
     pInner->vkpaint = NULL;
 }
 

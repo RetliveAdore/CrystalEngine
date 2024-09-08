@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 21:36:50
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-08 17:36:38
+ * @LastEditTime: 2024-09-08 23:21:29
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -18,6 +18,12 @@ const int enableValidationLayers = 0;
 const int enableValidationLayers = 1;
 #endif
 const char* validation_layer_name[] = {"VK_LAYER_KHRONOS_validation"};
+
+/**
+ * vulkan可以多帧并行渲染，
+ * 此处定义多可以多少帧并行渲染
+ */
+#define MAX_FRAMES_IN_FLIGHT 2
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL _inner_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
@@ -73,6 +79,7 @@ typedef struct vk_struct
         VkCommandBuffer *command_buffers;
         VkSemaphore *available_semaphores;
         VkSemaphore *finished_semaphores;
+        VkFence *in_flight_fences;
         VkFence *image_in_flight;
         size_t current_frame;
     }data;
@@ -112,6 +119,7 @@ static void _inner_device_initialization_()
     if (enableValidationLayers) {
         extensionCount = extensionCountB + 1;
         extensions = (const char**)CRAlloc(NULL, sizeof(const char*) * extensionCount);
+        if (!extensions) CR_LOG_ERR("auto", "bad alloc");
         for (int i = 0; i < extensionCountB; i++) {
             extensions[i] = extensionsB[i];
         }
@@ -171,6 +179,7 @@ void _inner_init_vk_()
     CRUINT32 deviceCount = 0;
     vkEnumeratePhysicalDevices(CR_VKINIT.instance, &deviceCount, NULL);
     VkPhysicalDevice *pDevice = (VkPhysicalDevice*)CRAlloc(NULL,sizeof(VkPhysicalDevice) * deviceCount);
+    if (!pDevice) CR_LOG_ERR("auto", "bad alloc");
     vkEnumeratePhysicalDevices(CR_VKINIT.instance, &deviceCount, pDevice);
     CR_VKINIT.physical_device = pDevice[0];
     VkPhysicalDeviceProperties prop;
@@ -182,6 +191,7 @@ void _inner_init_vk_()
     CR_VKINIT.queue_family_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(CR_VKINIT.physical_device, &(CR_VKINIT.queue_family_count), NULL);
     VkQueueFamilyProperties *pQueueProp = CRAlloc(NULL, sizeof(VkQueueFamilyProperties) * CR_VKINIT.queue_family_count);
+    if (!pQueueProp) CR_LOG_ERR("auto", "bad alloc");
     vkGetPhysicalDeviceQueueFamilyProperties(CR_VKINIT.physical_device, &(CR_VKINIT.queue_family_count), pQueueProp);
     for (int i = 0; i < CR_VKINIT.queue_family_count; i++)
     {
@@ -227,6 +237,8 @@ static void _inner_init_data_(PCR_VKSTRUCT pInner, CRUINT32 w, CRUINT32 h)
     pInner->swapchain.extent.height = h;
     pInner->swapchain.requested_min_image_count = 0;
     pInner->swapchain.present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    //
+    pInner->data.current_frame = 0;
 }
 
 static void _inner_create_logical_device_(PCR_VKSTRUCT pInner)
@@ -322,9 +334,11 @@ static void _inner_create_swapchain_(PCR_VKSTRUCT pInner)
 
     vkGetSwapchainImagesKHR(pInner->device, pInner->swapchain.swapchain, &(pInner->swapchain.image_count), NULL);
     pInner->swapchain.swapchain_images = (VkImage*)CRAlloc(NULL, sizeof(VkImage) * pInner->swapchain.image_count);
+    if (!pInner->swapchain.swapchain_images) CR_LOG_ERR("auto", "bad alloc");
     vkGetSwapchainImagesKHR(pInner->device, pInner->swapchain.swapchain, &(pInner->swapchain.image_count), pInner->swapchain.swapchain_images);
     
     pInner->swapchain.swapchain_image_views = (VkImageView*)CRAlloc(NULL, sizeof(VkImageView) * pInner->swapchain.image_count);
+    if (!pInner->swapchain.swapchain_image_views) CR_LOG_ERR("auto", "bad alloc");
     for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
     {
         VkImageViewCreateInfo image_view_create_infos =
@@ -576,16 +590,157 @@ static void _inner_create_pipeline_(PCR_VKSTRUCT pInner)
     vkDestroyShaderModule(pInner->device, frag_module, NULL);
 }
 
+static void _inner_create_frame_bffers_(PCR_VKSTRUCT pInner)
+{
+    pInner->data.framebuffers = (VkFramebuffer*)CRAlloc(NULL, sizeof(VkFramebuffer) * pInner->swapchain.image_count);
+    if (!pInner->data.framebuffers) CR_LOG_ERR("auto", "bad alloc");
+    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
+    {
+        VkImageView attachments[] = {pInner->swapchain.swapchain_image_views[i]};
+        VkFramebufferCreateInfo framebuffer_info = {
+            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+            .pNext = NULL,
+            .flags = 0,
+            .renderPass = pInner->data.render_pass,
+            .attachmentCount = 1,
+            .pAttachments = attachments,
+            .width = pInner->swapchain.extent.width,
+            .height = pInner->swapchain.extent.height,
+            .layers = 1
+        };
+        if (vkCreateFramebuffer(pInner->device, &framebuffer_info, NULL, &(pInner->data.framebuffers[i])) != VK_SUCCESS)
+            CR_LOG_WAR("auto", "failed to create framebuffer");
+    }
+}
+
+static void _inner_create_command_pool_(PCR_VKSTRUCT pInner)
+{
+    VkCommandPoolCreateInfo pool_info = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .queueFamilyIndex = 0
+    };
+    if (vkCreateCommandPool(pInner->device, &pool_info, NULL, &(pInner->data.command_pool)) != VK_SUCCESS)
+        CR_LOG_WAR("auto", "failedto create command pool");
+}
+
+static void _inner_create_command_buffers_(PCR_VKSTRUCT pInner)
+{
+    pInner->data.command_buffers = (VkCommandBuffer*)CRAlloc(NULL, sizeof(VkCommandBuffer) * pInner->swapchain.image_count);
+    if (!pInner->data.command_buffers) CR_LOG_ERR("auto", "bad alloc");
+    VkCommandBufferAllocateInfo allocInfo = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .pNext= NULL,
+        .commandBufferCount = (uint32_t)pInner->swapchain.image_count,
+        .commandPool = pInner->data.command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
+    };
+    if (vkAllocateCommandBuffers(pInner->device, &allocInfo, pInner->data.command_buffers) != VK_SUCCESS)
+        CR_LOG_WAR("auto", "failed to create command buffers");
+    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
+    {
+        VkCommandBufferBeginInfo begin_info = {0};
+        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        if (vkBeginCommandBuffer(pInner->data.command_buffers[i], &begin_info) != VK_SUCCESS)
+            CR_LOG_WAR("auto", "failed to begin recording command buffer!");
+        VkClearValue clearColor;
+        clearColor.color.float32[0] = 0.5f;
+        clearColor.color.float32[1] = 0.3f;
+        clearColor.color.float32[2] = 0.7f;
+        clearColor.color.float32[3] = 1.0f;
+        VkRenderPassBeginInfo render_pass_info = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .pNext = NULL,
+            .framebuffer = pInner->data.framebuffers[i],
+            .renderPass = pInner->data.render_pass,
+            .renderArea.offset.x = 0,
+            .renderArea.offset.y = 0,
+            .renderArea.extent = pInner->swapchain.extent,
+            .clearValueCount = 1,
+            .pClearValues = &clearColor
+        };
+        VkViewport viewport = {
+            .x = 0.0f,
+            .y = 0.0f,
+            .width = (float)pInner->swapchain.extent.width,
+            .height = (float)pInner->swapchain.extent.height,
+            .minDepth = 0.0f,
+            .maxDepth = 1.0f
+        };
+        VkRect2D scissor = {
+            .offset.x = 0,
+            .offset.y = 0,
+            .extent = pInner->swapchain.extent
+        };
+        //录入指令，之后可以直接执行缓冲中已有的指令
+        vkCmdSetViewport(pInner->data.command_buffers[i], 0, 1, &viewport);
+        vkCmdSetScissor(pInner->data.command_buffers[i], 0, 1, &scissor);
+        //
+        vkCmdBeginRenderPass(pInner->data.command_buffers[i], &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
+        vkCmdBindPipeline(pInner->data.command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pInner->data.graphics_pipeline);
+        vkCmdDraw(pInner->data.command_buffers[i], 3, 1, 0, 0);
+        vkCmdEndRenderPass(pInner->data.command_buffers[i]);
+        //
+        if (vkEndCommandBuffer(pInner->data.command_buffers[i]) != VK_SUCCESS)
+            CR_LOG_WAR("auto", "failed to record command buffer");
+    }
+}
+
+static void _inner_create_sync_objects_(PCR_VKSTRUCT pInner)
+{
+    pInner->data.available_semaphores = (VkSemaphore*)CRAlloc(NULL, sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+    pInner->data.finished_semaphores = (VkSemaphore*)CRAlloc(NULL, sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
+    pInner->data.in_flight_fences = (VkFence*)CRAlloc(NULL, sizeof(VkFence) * MAX_FRAMES_IN_FLIGHT);
+    pInner->data.image_in_flight = (VkFence*)CRAlloc(NULL, sizeof(VkFence) * pInner->swapchain.image_count);
+    if (!pInner->data.available_semaphores || !pInner->data.finished_semaphores || !pInner->data.in_flight_fences || !pInner->data.image_in_flight)
+        CR_LOG_ERR("auto", "bad alloc");
+    VkSemaphoreCreateInfo semaphore_info = {0};
+    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkFenceCreateInfo fence_info = {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT
+    };
+    for (CRUINT32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        if (
+            vkCreateSemaphore(pInner->device, &semaphore_info, NULL, &(pInner->data.available_semaphores[i])) != VK_SUCCESS ||
+            vkCreateSemaphore(pInner->device, &semaphore_info, NULL, &(pInner->data.finished_semaphores[i])) != VK_SUCCESS ||
+            vkCreateFence(pInner->device, &fence_info, NULL, &(pInner->data.in_flight_fences[i])) != VK_SUCCESS
+        )
+        CR_LOG_WAR("auto", "failed to create sync objects");
+    }
+    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
+        pInner->data.image_in_flight[i] = VK_NULL_HANDLE;
+}
+
+static void _inner_recreate_swap_chain_(PCR_VKSTRUCT pInner)
+{
+    vkDeviceWaitIdle(pInner->device);
+    //destroy
+    vkDestroyCommandPool(pInner->device, pInner->data.command_pool, NULL);
+    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
+        vkDestroyFramebuffer(pInner->device, pInner->data.framebuffers[i], NULL);
+    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
+        vkDestroyImageView(pInner->device, pInner->swapchain.swapchain_image_views[i], NULL);
+    //recreate
+    _inner_create_swapchain_(pInner);
+    _inner_create_frame_bffers_(pInner);
+    _inner_create_command_pool_(pInner);
+    _inner_create_command_buffers_(pInner);
+}
+
 /**
  * create device -
  * create swapchain -
  * get queues -
  * create render pass -
- * create graphics pipline
- * create frame buffers
- * create command pool
- * create command buffers
- * create sync objects
+ * create graphics pipline -
+ * create frame buffers -
+ * create command pool -
+ * create command buffers -
+ * create sync objects -
  */
 #ifdef CR_WINDOWS
 cr_vk _inner_create_vk_(HWND hWnd, CRUINT32 w, CRUINT32 h)
@@ -634,6 +789,13 @@ Success:
     //创建图形管线
     _inner_create_render_pass_(pInner);
     _inner_create_pipeline_(pInner);
+    //创建帧缓冲
+    _inner_create_frame_bffers_(pInner);
+    //创建命令池
+    _inner_create_command_pool_(pInner);
+    _inner_create_command_buffers_(pInner);
+    //创建同步实例
+    _inner_create_sync_objects_(pInner);
     //
     return pInner;
 }
@@ -683,6 +845,11 @@ CRSuccess:
     //创建图形管线
     _inner_create_render_pass_(pInner);
     _inner_create_pipeline_(pInner);
+    //创建命令池
+    _inner_create_command_pool_(pInner);
+    _inner_create_command_buffers_(pInner);
+    //创建同步实例
+    _inner_create_sync_objects_(pInner);
     //
     return pInner;
 }
@@ -691,6 +858,24 @@ CRSuccess:
 void _inner_release_vk_(cr_vk vk)
 {
     PCR_VKSTRUCT pInner = (PCR_VKSTRUCT)vk;
+    //释放同步实例
+    for (CRUINT32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+    {
+        vkDestroySemaphore(pInner->device, pInner->data.finished_semaphores[i], NULL);
+        vkDestroySemaphore(pInner->device, pInner->data.available_semaphores[i], NULL);
+        vkDestroyFence(pInner->device, pInner->data.in_flight_fences[i], NULL);
+    }
+    CRAlloc(pInner->data.finished_semaphores, 0);
+    CRAlloc(pInner->data.available_semaphores, 0);
+    CRAlloc(pInner->data.in_flight_fences, 0);
+    CRAlloc(pInner->data.image_in_flight, 0);
+    //释放指令缓冲
+    vkDestroyCommandPool(pInner->device, pInner->data.command_pool, NULL);
+    CRAlloc(pInner->data.command_buffers, 0);
+    //释放帧缓冲
+    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
+        vkDestroyFramebuffer(pInner->device, pInner->data.framebuffers[i], NULL);
+    CRAlloc(pInner->data.framebuffers, 0);
     //释放管线
     vkDestroyPipeline(pInner->device, pInner->data.graphics_pipeline, NULL);
     vkDestroyPipelineLayout(pInner->device, pInner->data.pipeline_layout, NULL);
@@ -704,4 +889,26 @@ void _inner_release_vk_(cr_vk vk)
     //释放设备
     vkDestroyDevice(pInner->device, NULL);
     vkDestroySurfaceKHR(CR_VKINIT.instance, pInner->surface, NULL);
+}
+
+void _inner_paint_ui_(cr_vk vk)
+{
+    // PCR_VKSTRUCT pInner = (PCR_VKSTRUCT)vk;
+    // vkWaitForFences(pInner->device, 1, pInner->data.in_flight_fences[pInner->data.current_frame], VK_TRUE, UINT64_MAX);
+    // CRUINT32 image_index = 0;
+    // VkResult result = vkAcquireNextImageKHR(pInner->device, pInner->swapchain.swapchain, UINT64_MAX, pInner->data.available_semaphores[pInner->data.current_frame], VK_NULL_HANDLE, &image_index);
+    // if (result == VK_ERROR_OUT_OF_DATE_KHR)
+    // {
+    //     _inner_recreate_swap_chain_(pInner);
+    //     return;
+    // }
+    // else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
+    // {
+    //     CR_LOG_ERR("auto", "failed to acquire swapchain image!");
+    //     return;
+    // }
+    // if (pInner->data.image_in_flight[image_index] != VK_NULL_HANDLE)
+    //     vkWaitForFences(pInner->device, 1, &(pInner->data.image_in_flight[image_index]), VK_TRUE, UINT64_MAX);
+    // pInner->data.image_in_flight[image_index] = pInner->data.in_flight_fences[pInner->data.current_frame];
+    
 }

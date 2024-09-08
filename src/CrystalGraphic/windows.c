@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-23 00:38:41
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-06 20:55:02
+ * @LastEditTime: 2024-09-08 23:22:08
  * @FilePath: \CrystalEngine\src\CrystalGraphic\windows.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -56,6 +56,7 @@ static LRESULT AfterProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, PCRW
     switch (msg)
     {
         case WM_PAINT:
+            _inner_paint_ui_(pInner->vkui);
             break;
         case WM_MOUSEMOVE:
             if (inf.y > 0)
@@ -149,6 +150,7 @@ LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         LPCREATESTRUCT lpcs = (LPCREATESTRUCT)lParam;
         SetWindowLongPtr(hWnd, GWLP_USERDATA, (LONG_PTR)(lpcs->lpCreateParams));
         pInner = lpcs->lpCreateParams;
+        pInner->vkui = _inner_create_vk_(hWnd, pInner->w, pInner->h);
         return 0;
     }
     pInner = (PCRWINDOWINNER)(CRUINT64)GetWindowLongPtr(hWnd, GWLP_USERDATA);
@@ -224,12 +226,12 @@ static void _inner_paint_ui_thread_(CRLVOID data, CRTHREAD idThis)
 static void _inner_paint_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = (PCRWINDOWINNER)data;
-    pInner->vkpaint = _inner_create_vk_(pInner->hWnd, pInner->w, pInner->h);
+    //pInner->vkpaint = _inner_create_vk_(pInner->hWnd, pInner->w, pInner->h);
     while (pInner->onProcess)
     {
         CRSleep(1);
     }
-    _inner_release_vk_(pInner->vkpaint);
+    //_inner_release_vk_(pInner->vkpaint);
     pInner->vkpaint = NULL;
 }
 

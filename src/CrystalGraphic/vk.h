@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 22:07:38
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-04 21:17:26
+ * @LastEditTime: 2024-09-08 23:17:59
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.h
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -20,9 +20,12 @@
 #endif
 
 typedef CRLVOID cr_vk;
+typedef CRLVOID cr_vk_inst;
 
 void _inner_init_vk_();
+cr_vk_inst _inner_create_vk_inst_();
 void _inner_uninit_vk_();
+void _inner_destroy_vk_inst_();
 
 #ifdef CR_WINDOWS
 cr_vk _inner_create_vk_(HWND hWnd, CRUINT32 w, CRUINT32 h);
@@ -31,3 +34,14 @@ cr_vk _inner_create_vk_(Display *dpy, Window win, CRUINT32 w, CRUINT32 h);
 #endif
 
 void _inner_release_vk_(cr_vk vk);
+
+void _inner_setsize_vk_(CRUINT32 w, CRUINT32 h);
+void _inner_resize_vk_(cr_vk vk);
+/**
+ * UI层在content层之上，确保UI永远不会被图像挡住
+ * ------------------UI      ^
+ * ------------------Content |
+ */
+
+//使用此函数来绘制UI层
+void _inner_paint_ui_(cr_vk vk);

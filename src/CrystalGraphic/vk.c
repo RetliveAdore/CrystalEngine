@@ -2,913 +2,302 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 21:36:50
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-08 23:21:29
+ * @LastEditTime: 2024-09-09 22:18:58
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */
 #include "vk.h"
 #include <resources.h>
+#include <stdio.h>
 
-//虚拟机中不支持调试层扩展
-#define NDEBUG
-#ifdef NDEBUG
-const int enableValidationLayers = 0;
-#else
-const int enableValidationLayers = 1;
-#endif
-const char* validation_layer_name[] = {"VK_LAYER_KHRONOS_validation"};
+//用于控制是否启用验证层
+#define CRVK_NO_DBG
+
+#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 /**
- * vulkan可以多帧并行渲染，
- * 此处定义多可以多少帧并行渲染
+ * 追踪所有纹理相关的实体
  */
-#define MAX_FRAMES_IN_FLIGHT 2
+typedef struct{
+    VkSampler sampler;
+    //
+    VkImage image;
+    VkImageLayout imageLayout;
+    //
+    VkMemoryAllocateInfo mem_alloc;
+    VkDeviceMemory mem;
+    VkImageView view;
+    CRUINT32 tex_width, tex_height;
+}texture_object;
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL _inner_debug_callback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-    VkDebugUtilsMessageTypeFlagsEXT messageType,
-    const VkDebugUtilsMessengerCallbackDataEXT* pCallbackData,
-    void* pUserData
+VKAPI_ATTR VkBool32 VKAPI_CALL
+dbgFunc(
+    VkFlags msgFlags, VkDebugReportObjectTypeEXT objType,
+    uint64_t srcObject, size_t location, int32_t msgCode,
+    const char *pLayerPrefix, const char *pMsg, void *pUserData
 )
 {
-    CR_LOG_WAR("auto", "validation layer: %s", pCallbackData->pMessage);
+    char *message = (char *)CRAlloc(NULL, strlen(pMsg) + 100);
+
+    if (msgFlags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+    {
+        sprintf(message, "ERROR: [%s] Code %d : %s", pLayerPrefix, msgCode, pMsg);
+    }
+    else if (msgFlags & VK_DEBUG_REPORT_WARNING_BIT_EXT)
+    {
+        // We know that we're submitting queues without fences, ignore this
+        // warning
+        if (strstr(pMsg, "vkQueueSubmit parameter, VkFence fence, is null pointer"))
+        {
+            return VK_FALSE;
+        }
+        sprintf(message, "WARNING: [%s] Code %d : %s", pLayerPrefix, msgCode, pMsg);
+    }
+    else
+    {
+        return VK_FALSE;
+    }
+
+    CRPrint(CR_TC_RED, "%s", message);
+    CRAlloc(message, 0);
+
+    /*
+     * false indicates that layer should not bail-out of an
+     * API call that had validation failures. This may mean that the
+     * app dies inside the driver due to invalid parameter(s).
+     * That's what would happen without validation layers, so we'll
+     * keep that behavior here.
+     */
     return VK_FALSE;
 }
 
-const char* device_extensions[] = {
-        VK_KHR_SWAPCHAIN_EXTENSION_NAME
-};
+typedef struct{
+    VkImage image;
+    VkCommandBuffer cmd;
+    VkImageView view;
+}SwapchainBuffers;
 
-//单例，每个进程只需要初始化一次
-static struct vk_init
-{
-    VkInstance instance;
-    VkPhysicalDevice physical_device;
-    CRUINT32 queue_family_count;
-    CRUINT32 graphics_family_index;
-    VkDebugUtilsMessengerEXT debugMessenger;
-}CR_VKINIT;
-
-//实例，每个进程可以创建多个
-typedef struct vk_struct
-{
+typedef struct vk_inner{
+    #ifdef CR_WINDOWS
+    HINSTANCE hInst;
+    HWND window;
+    #elif defined CR_LINUIX
+    #endif
     VkSurfaceKHR surface;
+    CRBOOL inited;
+    CRBOOL using_staging_buffer;
+    //
+    VkInstance inst;
+    VkPhysicalDevice gpu;
     VkDevice device;
-    CRUINT32 present_family_index;
+    VkQueue queue;
+    CRUINT32 graphics_queue_node_index;
+    VkPhysicalDeviceProperties gpu_props;
+    VkQueueFamilyProperties *queue_props;
+    VkPhysicalDeviceMemoryProperties memory_properties;
+    //
+    CRUINT32 enabled_extensions_count;
+    CRUINT32 enabled_layer_count;
+    char* extension_names[64];
+    char* device_validation_layers[64];
+    //
+    CRUINT32 width, height;
+    VkFormat format;
+    VkColorSpaceKHR color_space;
+    //
+    PFN_vkGetPhysicalDeviceSurfaceSupportKHR fpGetPhysicalDeviceSurfaceSupportKHR;
+    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR fpGetPhysicalDeviceSurfaceCapabilitiesKHR;
+    PFN_vkGetPhysicalDeviceSurfaceFormatsKHR fpGetPhysicalDeviceSurfaceFormatsKHR;
+    PFN_vkGetPhysicalDeviceSurfacePresentModesKHR fpGetPhysicalDeviceSurfacePresentModesKHR;
+    PFN_vkCreateSwapchainKHR fpCreateSwapchainKHR;
+    PFN_vkDestroySwapchainKHR fpDestroySwapchainKHR;
+    PFN_vkGetSwapchainImagesKHR fpGetSwapchainImagesKHR;
+    PFN_vkAcquireNextImageKHR fpAcquireNextImageKHR;
+    PFN_vkQueuePresentKHR fpQueuePresentKHR;
+    CRUINT32 swapchainImageCount;
+    VkSwapchainKHR swapchain;
+    SwapchainBuffers *buffers;
+    //
+    VkCommandPool cmd_pool;
     struct{
-        VkSwapchainKHR swapchain;
-        CRUINT32 image_count;
-        VkFormat image_format;
-        VkColorSpaceKHR color_space;
-        VkImageUsageFlags image_usage_flags;
-        VkExtent2D extent;
-        CRUINT32 requested_min_image_count;
-        VkPresentModeKHR present_mode;
-        VkImage *swapchain_images;
-        VkImageView *swapchain_image_views;
-    }swapchain;
+        VkFormat format;
+        VkImage image;
+        VkMemoryAllocateInfo mem_alloc;
+        VkDeviceMemory mem;
+        VkImageView view;
+    }depth;
+    //
+    texture_object *pTextures;
     struct{
-        VkQueue graphics_queue;
-        VkQueue present_queue;
-        VkFramebuffer *framebuffers;
-        VkRenderPass render_pass;
-        VkPipelineLayout pipeline_layout;
-        VkPipeline graphics_pipeline;
-        VkCommandPool command_pool;
-        VkCommandBuffer *command_buffers;
-        VkSemaphore *available_semaphores;
-        VkSemaphore *finished_semaphores;
-        VkFence *in_flight_fences;
-        VkFence *image_in_flight;
-        size_t current_frame;
-    }data;
-    #ifdef CR_WINDOWS
-    HWND hWnd;
-    #elif defined CR_LINUX
-    Display *pDisplay;
-    Window window;
-    #endif
-}CR_VKSTRUCT, *PCR_VKSTRUCT;
-
-#ifdef CR_WINDOWS
-static CRUINT32 extensionCountB = 2;
-static const char* extensionsB[2] = {
-    VK_KHR_SURFACE_EXTENSION_NAME,
-    VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
-};
-#elif defined CR_LINUX
-static CRUINT32 extensionCountB = 2;
-static const char* extensionsB[2] = {
-    VK_KHR_SURFACE_EXTENSION_NAME,
-    VK_KHR_XLIB_SURFACE_EXTENSION_NAME
-};
-#endif
-static const char** extensions = NULL;
-static uint32_t extensionCount = 0;
-
-static void _inner_device_initialization_()
-{
-    VkApplicationInfo appInfo = {0};
-    appInfo.sType =VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    appInfo.pApplicationName = "CrystalVulkan";
-    appInfo.pEngineName = "Crystal Engine";
-    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
-    appInfo.apiVersion = VK_API_VERSION_1_2;
+        VkBuffer buf;
+        VkMemoryAllocateInfo mem_alloc;
+        VkDeviceMemory mem;
+        VkDescriptorBufferInfo buffer_info;
+    }uniform_data;
     //
-    if (enableValidationLayers) {
-        extensionCount = extensionCountB + 1;
-        extensions = (const char**)CRAlloc(NULL, sizeof(const char*) * extensionCount);
-        if (!extensions) CR_LOG_ERR("auto", "bad alloc");
-        for (int i = 0; i < extensionCountB; i++) {
-            extensions[i] = extensionsB[i];
-        }
-        extensions[extensionCount - 1] = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-    } else {
-        extensionCount = extensionCountB;
-        extensions = extensionsB;
-    }
-
-    VkInstanceCreateInfo instanceCreateInfo = {0};
-    instanceCreateInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    instanceCreateInfo.pApplicationInfo = &appInfo;
-    instanceCreateInfo.enabledExtensionCount = extensionCount;
-    instanceCreateInfo.ppEnabledExtensionNames = extensions;
-    if (enableValidationLayers)
-    {
-        VkDebugUtilsMessengerCreateInfoEXT debug_create_info = {0};
-        debug_create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        debug_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        debug_create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        debug_create_info.pfnUserCallback = _inner_debug_callback;
-
-        instanceCreateInfo.enabledLayerCount = 1;
-        instanceCreateInfo.ppEnabledLayerNames = validation_layer_name;
-        instanceCreateInfo.pNext = &debug_create_info;
-    }
-    else
-    {
-        instanceCreateInfo.enabledLayerCount = 0;
-    }
-    if (vkCreateInstance(&instanceCreateInfo, NULL, &(CR_VKINIT.instance)) != VK_SUCCESS)
-        CR_LOG_ERR("auto", "failed to create instance!");
-    // setup debug messenger
-    if (enableValidationLayers) {
-        VkDebugUtilsMessengerCreateInfoEXT debug_create_info = {0};
-        debug_create_info.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-        debug_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        debug_create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        debug_create_info.pfnUserCallback = _inner_debug_callback;
-
-        PFN_vkCreateDebugUtilsMessengerEXT func = (PFN_vkCreateDebugUtilsMessengerEXT) vkGetInstanceProcAddr(CR_VKINIT.instance, "vkCreateDebugUtilsMessengerEXT");
-        if (func == NULL)
-            CR_LOG_WAR("auto", "vkCreateDebugUtilsMessengerEXT not found!");
-        else if (func(CR_VKINIT.instance, &debug_create_info, NULL, &(CR_VKINIT.debugMessenger)) != VK_SUCCESS)
-            CR_LOG_WAR("auto", "failed to set up debug messenger!");
-    }
-}
-
-void _inner_init_vk_()
-{
-    #ifdef CR_WINDOWS
-    VkWin32SurfaceCreateInfoKHR inf;
-    #elif defined CR_LINUX
-    #endif
-    _inner_device_initialization_();
-    //枚举物理设备
-    CRUINT32 deviceCount = 0;
-    vkEnumeratePhysicalDevices(CR_VKINIT.instance, &deviceCount, NULL);
-    VkPhysicalDevice *pDevice = (VkPhysicalDevice*)CRAlloc(NULL,sizeof(VkPhysicalDevice) * deviceCount);
-    if (!pDevice) CR_LOG_ERR("auto", "bad alloc");
-    vkEnumeratePhysicalDevices(CR_VKINIT.instance, &deviceCount, pDevice);
-    CR_VKINIT.physical_device = pDevice[0];
-    VkPhysicalDeviceProperties prop;
-    vkGetPhysicalDeviceProperties(CR_VKINIT.physical_device, &prop);
-    CRUINT32 extensionCounts = 0;
-    vkEnumerateInstanceExtensionProperties(NULL, &extensionCounts, NULL);
-    CR_LOG_IFO("auto", "Default graphic card: %s, %d extensions supported", prop.deviceName, extensionCounts);
-    //检查是否支持图形命令队列
-    CR_VKINIT.queue_family_count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(CR_VKINIT.physical_device, &(CR_VKINIT.queue_family_count), NULL);
-    VkQueueFamilyProperties *pQueueProp = CRAlloc(NULL, sizeof(VkQueueFamilyProperties) * CR_VKINIT.queue_family_count);
-    if (!pQueueProp) CR_LOG_ERR("auto", "bad alloc");
-    vkGetPhysicalDeviceQueueFamilyProperties(CR_VKINIT.physical_device, &(CR_VKINIT.queue_family_count), pQueueProp);
-    for (int i = 0; i < CR_VKINIT.queue_family_count; i++)
-    {
-        if (pQueueProp[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-        {
-            CR_VKINIT.graphics_family_index = i;
-            goto CRSuccess;
-        } 
-    }
-Failed:
-    CR_LOG_WAR("auto", "failed to found graphics family index");
-CRSuccess:
-    CRAlloc(pQueueProp, 0);
-    CRAlloc(pDevice, 0);
-}
-
-void _inner_uninit_vk_()
-{
-    if (enableValidationLayers)
-    {
-        PFN_vkDestroyDebugUtilsMessengerEXT func = (PFN_vkDestroyDebugUtilsMessengerEXT) vkGetInstanceProcAddr(CR_VKINIT.instance, "vkDestroyDebugUtilsMessengerEXT");
-        if (func != NULL) func(CR_VKINIT.instance, CR_VKINIT.debugMessenger, NULL);
-    }
-    vkDestroyInstance(CR_VKINIT.instance, NULL);
-    CR_VKINIT.instance = VK_NULL_HANDLE;
-    if (enableValidationLayers)
-        CRAlloc(extensions, 0);
-}
-
-//
-//
-//////////
-//
-
-static void _inner_init_data_(PCR_VKSTRUCT pInner, CRUINT32 w, CRUINT32 h)
-{
-    pInner->swapchain.swapchain = VK_NULL_HANDLE;
-    pInner->swapchain.image_count = 0;
-    pInner->swapchain.image_format = VK_FORMAT_B8G8R8A8_SRGB;
-    pInner->swapchain.color_space = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-    pInner->swapchain.image_usage_flags = 0;
-    pInner->swapchain.extent.width = w;
-    pInner->swapchain.extent.height = h;
-    pInner->swapchain.requested_min_image_count = 0;
-    pInner->swapchain.present_mode = VK_PRESENT_MODE_FIFO_KHR;
+    VkCommandBuffer cmd;
+    VkPipelineLayout pipeline_layout;
+    VkDescriptorSetLayout desc_layout;
+    VkPipelineCache pipelineCache;
+    VkRenderPass render_pass;
+    VkPipeline pipeline;
     //
-    pInner->data.current_frame = 0;
-}
-
-static void _inner_create_logical_device_(PCR_VKSTRUCT pInner)
-{
-    float queuePriority = 1.0f;
-    VkPhysicalDeviceFeatures device_features = {0};
-    VkDeviceCreateInfo device_create_info = {0};
-    device_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    VkDeviceQueueCreateInfo queue_create_infos[2] = {
-        {0},
-        {0},
-    };
-    queue_create_infos[0].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_create_infos[0].queueFamilyIndex = CR_VKINIT.graphics_family_index;
-    queue_create_infos[0].queueCount = 1;
-    queue_create_infos[0].pQueuePriorities = &queuePriority;
-    queue_create_infos[1].sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_create_infos[1].queueFamilyIndex = pInner->present_family_index;
-    queue_create_infos[1].queueCount = 1;
-    queue_create_infos[1].pQueuePriorities = &queuePriority;
+    VkShaderModule vert_shader_module;
+    VkShaderModule frag_shader_module;
     //
-    if (CR_VKINIT.graphics_family_index != pInner->present_family_index)
-        device_create_info.queueCreateInfoCount = 2;
-    else
-        device_create_info.queueCreateInfoCount = 1;
-    device_create_info.pQueueCreateInfos = queue_create_infos;
-    device_create_info.enabledExtensionCount = 1;
-    device_create_info.ppEnabledExtensionNames = device_extensions;
-    if (enableValidationLayers)
-    {
-        device_create_info.enabledLayerCount = 1;
-        device_create_info.ppEnabledLayerNames = validation_layer_name;
-    }
-    else
-    {
-        device_create_info.enabledLayerCount = 0;
-    }
-    device_create_info.pEnabledFeatures = &device_features;
-    if (vkCreateDevice(CR_VKINIT.physical_device, &device_create_info, NULL, &(pInner->device)) != VK_SUCCESS)
-        CR_LOG_WAR("auto", "failed to create logical device!");
-}
-
-static void _inner_create_swapchain_(PCR_VKSTRUCT pInner)
-{
-    VkSurfaceCapabilitiesKHR capabilities;
-    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(CR_VKINIT.physical_device, pInner->surface, &capabilities);
-    pInner->swapchain.image_count = capabilities.minImageCount + 1;
-    //对图像数量进行校正
-    if (capabilities.maxImageCount > 0 &&pInner->swapchain.image_count > capabilities.maxImageCount)
-        pInner->swapchain.image_count = capabilities.maxImageCount;
+    VkDescriptorPool decs_pool;
+    VkDescriptorSet desc_set;
     //
-    VkSwapchainCreateInfoKHR swapchain_create_info = {
-        .sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
-        .pNext = NULL,
-        .flags = 0,
-        .surface = pInner->surface,
-        .minImageCount = pInner->swapchain.image_count,
-        .imageFormat = pInner->swapchain.image_format,
-        .imageColorSpace = pInner->swapchain.color_space,
-        .imageExtent = pInner->swapchain.extent,
-        .imageArrayLayers = 1,
-        .imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
-        .preTransform = capabilities.currentTransform,
-        .compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-        .presentMode = pInner->swapchain.present_mode,
-        .clipped = VK_TRUE,
-        .oldSwapchain = VK_NULL_HANDLE
-    };
-    CRUINT32 queue_family_indicies[] = { CR_VKINIT.graphics_family_index, pInner->present_family_index};
-    swapchain_create_info.pQueueFamilyIndices = queue_family_indicies;
-    if (queue_family_indicies[0] != queue_family_indicies[1])
-    {
-        swapchain_create_info.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
-        swapchain_create_info.queueFamilyIndexCount = 2;
-    }
-    else
-    {
-        swapchain_create_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        swapchain_create_info.queueFamilyIndexCount = 1;
-    }
-    if (swapchain_create_info.imageExtent.width < capabilities.minImageExtent.width || swapchain_create_info.imageExtent.height < capabilities.minImageExtent.height)
-    {
-        swapchain_create_info.imageExtent.width = capabilities.minImageExtent.width;
-        swapchain_create_info.imageExtent.height = capabilities.minImageExtent.height;
-    }
-    else if (swapchain_create_info.imageExtent.width > capabilities.maxImageExtent.width || swapchain_create_info.imageExtent.height > capabilities.maxImageExtent.height)
-    {
-        swapchain_create_info.imageExtent.width = capabilities.maxImageExtent.width;
-        swapchain_create_info.imageExtent.height = capabilities.maxImageExtent.height;
-    }
-    if (vkCreateSwapchainKHR(pInner->device, &swapchain_create_info, NULL, &(pInner->swapchain.swapchain)) != VK_SUCCESS)
-        CR_LOG_WAR("auto", "failed to create swap chain!");
-
-    vkGetSwapchainImagesKHR(pInner->device, pInner->swapchain.swapchain, &(pInner->swapchain.image_count), NULL);
-    pInner->swapchain.swapchain_images = (VkImage*)CRAlloc(NULL, sizeof(VkImage) * pInner->swapchain.image_count);
-    if (!pInner->swapchain.swapchain_images) CR_LOG_ERR("auto", "bad alloc");
-    vkGetSwapchainImagesKHR(pInner->device, pInner->swapchain.swapchain, &(pInner->swapchain.image_count), pInner->swapchain.swapchain_images);
-    
-    pInner->swapchain.swapchain_image_views = (VkImageView*)CRAlloc(NULL, sizeof(VkImageView) * pInner->swapchain.image_count);
-    if (!pInner->swapchain.swapchain_image_views) CR_LOG_ERR("auto", "bad alloc");
-    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
-    {
-        VkImageViewCreateInfo image_view_create_infos =
-        {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = NULL,
-            .flags = 0,
-            .image = pInner->swapchain.swapchain_images[i],
-            .viewType = VK_IMAGE_TYPE_2D,
-            .format = pInner->swapchain.image_format,
-            //
-            .components.r = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .components.g = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .components.b = VK_COMPONENT_SWIZZLE_IDENTITY,
-            .components.a = VK_COMPONENT_SWIZZLE_IDENTITY,
-            //
-            .subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .subresourceRange.baseMipLevel = 0,
-            .subresourceRange.levelCount = 1,
-            .subresourceRange.baseArrayLayer = 0,
-            .subresourceRange.layerCount = 1
-        };
-        if (vkCreateImageView(pInner->device, &image_view_create_infos, NULL, &(pInner->swapchain.swapchain_image_views[i])) != VK_SUCCESS)
-            CR_LOG_WAR("auto", "failed to create image views!");
-    }
-}
-
-static void _inner_get_queues_(PCR_VKSTRUCT pInner)
-{
-    vkGetDeviceQueue(pInner->device, CR_VKINIT.graphics_family_index, 0, &(pInner->data.graphics_queue));
-    vkGetDeviceQueue(pInner->device, pInner->present_family_index, 0, &(pInner->data.present_queue));
-}
-
-//创建图形管线
-static void _inner_create_render_pass_(PCR_VKSTRUCT pInner)
-{
-    VkAttachmentDescription color_attachment = {
-        .flags = 0,
-        .format = pInner->swapchain.image_format,
-        .samples = VK_SAMPLE_COUNT_1_BIT,
-        .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-        .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-        .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
-        .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
-    };
-    VkAttachmentReference color_attachment_reference = {
-        .attachment = 0,
-        .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-    };
-    VkSubpassDescription subpass = {0};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &color_attachment_reference;
-    VkSubpassDependency dependency = {
-        .dependencyFlags = 0,
-        .srcSubpass = VK_SUBPASS_EXTERNAL,
-        .srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .srcAccessMask = 0,
-        .dstSubpass = 0,
-        .dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-    };
-    VkRenderPassCreateInfo renderpass_info = {
-        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .flags = 0,
-        .pNext = NULL,
-        .attachmentCount = 1,
-        .pAttachments = &color_attachment,
-        .subpassCount = 1,
-        .pSubpasses = &subpass,
-        .dependencyCount = 1,
-        .pDependencies = &dependency
-    };
-    if (vkCreateRenderPass(pInner->device, &renderpass_info, NULL, &(pInner->data.render_pass)) != VK_SUCCESS)
-        CR_LOG_WAR("auto", "failed to create render pass!");
-}
-
-static VkShaderModule _inner_create_shader_module_(VkDevice device, const uint32_t* code, size_t code_size)
-{
-    VkShaderModuleCreateInfo create_info = {0};
-    create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    create_info.codeSize = code_size;
-    create_info.pCode = code;
-    VkShaderModule shaderModule;
-    if (vkCreateShaderModule(device, &create_info, NULL, &shaderModule) != VK_SUCCESS)
-    {
-        CR_LOG_WAR("auto", "failed to create shader module!");
-        return VK_NULL_HANDLE;
-    }
-    return shaderModule;
-}
-
-static void _inner_create_pipeline_(PCR_VKSTRUCT pInner)
-{
-    CRUINT64 size_vert = (CRUINT64)&_binary_out_objs_shader_defaultshader_vert_spv_size;
-    CRUINT64 size_frag = (CRUINT64)&_binary_out_objs_shader_defaultshader_frag_spv_size;
-    const char* vert_code = &_binary_out_objs_shader_defaultshader_vert_spv_start;
-    const char* frag_code = &_binary_out_objs_shader_defaultshader_frag_spv_start;
-    VkShaderModule vert_module = _inner_create_shader_module_(pInner->device, (const uint32_t*)vert_code, size_vert);
-    VkShaderModule frag_module = _inner_create_shader_module_(pInner->device, (const uint32_t*)frag_code, size_frag);
-
-    VkPipelineShaderStageCreateInfo vert_stage_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .stage = VK_SHADER_STAGE_VERTEX_BIT,
-        .module = vert_module,
-        .pName = "main",
-        .pSpecializationInfo = NULL
-    };
-    VkPipelineShaderStageCreateInfo frag_stage_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-        .module = frag_module,
-        .pName = "main",
-        .pSpecializationInfo = NULL
-    };
-    VkPipelineShaderStageCreateInfo shader_stages[] = {vert_stage_info, frag_stage_info};
-    VkPipelineVertexInputStateCreateInfo vertex_input_info = {  //顶点输入设置
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .vertexBindingDescriptionCount = 0,
-        .vertexAttributeDescriptionCount = 0,
-        .pVertexBindingDescriptions = NULL,
-        .pVertexAttributeDescriptions = NULL
-    };
-    VkPipelineInputAssemblyStateCreateInfo input_assembly = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-        .primitiveRestartEnable = VK_FALSE
-    };
-    VkViewport viewport = {
-        .x = 0.0f,
-        .y = 0.0f,
-        .width = (float)pInner->swapchain.extent.width,
-        .height = (float)pInner->swapchain.extent.height,
-        .minDepth = 0.0f,
-        .maxDepth = 1.0f
-    };
-    VkRect2D scissor = {  //剪裁：不剪裁，直接输出全部
-        .offset.x = 0,
-        .offset.y = 0,
-        .extent = pInner->swapchain.extent
-    };
-    VkPipelineViewportStateCreateInfo viewport_stat = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .viewportCount = 1,
-        .pViewports = &viewport,
-        .scissorCount = 1,
-        .pScissors = &scissor
-    };
-    VkPipelineRasterizationStateCreateInfo rasterizer = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .depthClampEnable = VK_FALSE,
-        .rasterizerDiscardEnable = VK_FALSE,
-        .polygonMode = VK_POLYGON_MODE_FILL,
-        .lineWidth= 1.0f,
-        .cullMode = VK_CULL_MODE_BACK_BIT,
-        .frontFace = VK_FRONT_FACE_CLOCKWISE,
-        .depthBiasEnable = VK_FALSE,
-        .depthBiasConstantFactor = 0.0f,
-        .depthBiasClamp = 0.0f,
-        .depthBiasSlopeFactor = 0.0f
-    };
-    VkPipelineMultisampleStateCreateInfo multisampling = {  //多重采样，需要抗锯齿时启用
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .sampleShadingEnable = VK_FALSE,
-        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
-        .minSampleShading = 1.0f,
-        .pSampleMask = NULL,
-        .alphaToCoverageEnable = VK_FALSE,
-        .alphaToOneEnable = VK_FALSE
-    };
-    VkPipelineColorBlendAttachmentState colorBlendAttachment = {
-        .blendEnable = VK_TRUE,
-        .colorWriteMask = VK_COLOR_COMPONENT_A_BIT | VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT,
-        .srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,  //采用透明度混合的算法
-        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,  //
-        .colorBlendOp = VK_BLEND_OP_ADD,  //采用加性混合
-        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO,
-        .alphaBlendOp = VK_BLEND_OP_ADD
-    };
-    VkPipelineColorBlendStateCreateInfo color_blending = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .logicOpEnable = VK_FALSE,
-        .logicOp = VK_LOGIC_OP_COPY,
-        .attachmentCount = 1,
-        .pAttachments = &colorBlendAttachment,
-        .blendConstants[0] = 0.0f,
-        .blendConstants[1] = 0.0f,
-        .blendConstants[2] = 0.0f,
-        .blendConstants[3] = 0.0f
-    };
-    VkPipelineLayoutCreateInfo pipeline_layout_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .setLayoutCount = 0,
-        .pushConstantRangeCount = 0
-    };
-    if (vkCreatePipelineLayout(pInner->device, &pipeline_layout_info, NULL, &(pInner->data.pipeline_layout)) != VK_SUCCESS)
-        CR_LOG_WAR("auto", "failed to create pipeline layout");
-    VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
-    VkPipelineDynamicStateCreateInfo dynamic_info = {
-        .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .dynamicStateCount = 2,
-        .pDynamicStates = dynamic_states
-    };
-    VkGraphicsPipelineCreateInfo pipeline_info = {
-        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .stageCount =2,
-        .pStages = shader_stages,
-        .pVertexInputState = &vertex_input_info,
-        .pInputAssemblyState = &input_assembly,
-        .pViewportState = &viewport_stat,
-        .pRasterizationState = &rasterizer,
-        .pMultisampleState = &multisampling,
-        .pColorBlendState = &color_blending,
-        .pDynamicState = &dynamic_info,
-        .layout = pInner->data.pipeline_layout,
-        .renderPass = pInner->data.render_pass,
-        .subpass = 0,
-        .basePipelineHandle = VK_NULL_HANDLE
-    };
-    if (vkCreateGraphicsPipelines(pInner->device, VK_NULL_HANDLE, 1, &pipeline_info, NULL, &(pInner->data.graphics_pipeline)) != VK_SUCCESS)
-        CR_LOG_WAR("auto", "failed to create graphics pipeline!");
+    VkFramebuffer *frameBuffers;
+    CRUINT32 curFrame;
+    CRUINT32 frameCount;
+    CRBOOL validate;
+    CRBOOL use_break;
+    PFN_vkCreateDebugReportCallbackEXT CreateDebugReportCallback;
+    PFN_vkDestroyDebugReportCallbackEXT DestroyDebugReportCallback;
+    VkDebugReportCallbackEXT msg_callback;
+    PFN_vkDebugReportMessageEXT DebugReportMessage;
     //
-    vkDestroyShaderModule(pInner->device, vert_module, NULL);
-    vkDestroyShaderModule(pInner->device, frag_module, NULL);
-}
-
-static void _inner_create_frame_bffers_(PCR_VKSTRUCT pInner)
-{
-    pInner->data.framebuffers = (VkFramebuffer*)CRAlloc(NULL, sizeof(VkFramebuffer) * pInner->swapchain.image_count);
-    if (!pInner->data.framebuffers) CR_LOG_ERR("auto", "bad alloc");
-    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
-    {
-        VkImageView attachments[] = {pInner->swapchain.swapchain_image_views[i]};
-        VkFramebufferCreateInfo framebuffer_info = {
-            .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .pNext = NULL,
-            .flags = 0,
-            .renderPass = pInner->data.render_pass,
-            .attachmentCount = 1,
-            .pAttachments = attachments,
-            .width = pInner->swapchain.extent.width,
-            .height = pInner->swapchain.extent.height,
-            .layers = 1
-        };
-        if (vkCreateFramebuffer(pInner->device, &framebuffer_info, NULL, &(pInner->data.framebuffers[i])) != VK_SUCCESS)
-            CR_LOG_WAR("auto", "failed to create framebuffer");
-    }
-}
-
-static void _inner_create_command_pool_(PCR_VKSTRUCT pInner)
-{
-    VkCommandPoolCreateInfo pool_info = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .queueFamilyIndex = 0
-    };
-    if (vkCreateCommandPool(pInner->device, &pool_info, NULL, &(pInner->data.command_pool)) != VK_SUCCESS)
-        CR_LOG_WAR("auto", "failedto create command pool");
-}
-
-static void _inner_create_command_buffers_(PCR_VKSTRUCT pInner)
-{
-    pInner->data.command_buffers = (VkCommandBuffer*)CRAlloc(NULL, sizeof(VkCommandBuffer) * pInner->swapchain.image_count);
-    if (!pInner->data.command_buffers) CR_LOG_ERR("auto", "bad alloc");
-    VkCommandBufferAllocateInfo allocInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .pNext= NULL,
-        .commandBufferCount = (uint32_t)pInner->swapchain.image_count,
-        .commandPool = pInner->data.command_pool,
-        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY
-    };
-    if (vkAllocateCommandBuffers(pInner->device, &allocInfo, pInner->data.command_buffers) != VK_SUCCESS)
-        CR_LOG_WAR("auto", "failed to create command buffers");
-    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
-    {
-        VkCommandBufferBeginInfo begin_info = {0};
-        begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        if (vkBeginCommandBuffer(pInner->data.command_buffers[i], &begin_info) != VK_SUCCESS)
-            CR_LOG_WAR("auto", "failed to begin recording command buffer!");
-        VkClearValue clearColor;
-        clearColor.color.float32[0] = 0.5f;
-        clearColor.color.float32[1] = 0.3f;
-        clearColor.color.float32[2] = 0.7f;
-        clearColor.color.float32[3] = 1.0f;
-        VkRenderPassBeginInfo render_pass_info = {
-            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .pNext = NULL,
-            .framebuffer = pInner->data.framebuffers[i],
-            .renderPass = pInner->data.render_pass,
-            .renderArea.offset.x = 0,
-            .renderArea.offset.y = 0,
-            .renderArea.extent = pInner->swapchain.extent,
-            .clearValueCount = 1,
-            .pClearValues = &clearColor
-        };
-        VkViewport viewport = {
-            .x = 0.0f,
-            .y = 0.0f,
-            .width = (float)pInner->swapchain.extent.width,
-            .height = (float)pInner->swapchain.extent.height,
-            .minDepth = 0.0f,
-            .maxDepth = 1.0f
-        };
-        VkRect2D scissor = {
-            .offset.x = 0,
-            .offset.y = 0,
-            .extent = pInner->swapchain.extent
-        };
-        //录入指令，之后可以直接执行缓冲中已有的指令
-        vkCmdSetViewport(pInner->data.command_buffers[i], 0, 1, &viewport);
-        vkCmdSetScissor(pInner->data.command_buffers[i], 0, 1, &scissor);
-        //
-        vkCmdBeginRenderPass(pInner->data.command_buffers[i], &render_pass_info, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(pInner->data.command_buffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, pInner->data.graphics_pipeline);
-        vkCmdDraw(pInner->data.command_buffers[i], 3, 1, 0, 0);
-        vkCmdEndRenderPass(pInner->data.command_buffers[i]);
-        //
-        if (vkEndCommandBuffer(pInner->data.command_buffers[i]) != VK_SUCCESS)
-            CR_LOG_WAR("auto", "failed to record command buffer");
-    }
-}
-
-static void _inner_create_sync_objects_(PCR_VKSTRUCT pInner)
-{
-    pInner->data.available_semaphores = (VkSemaphore*)CRAlloc(NULL, sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
-    pInner->data.finished_semaphores = (VkSemaphore*)CRAlloc(NULL, sizeof(VkSemaphore) * MAX_FRAMES_IN_FLIGHT);
-    pInner->data.in_flight_fences = (VkFence*)CRAlloc(NULL, sizeof(VkFence) * MAX_FRAMES_IN_FLIGHT);
-    pInner->data.image_in_flight = (VkFence*)CRAlloc(NULL, sizeof(VkFence) * pInner->swapchain.image_count);
-    if (!pInner->data.available_semaphores || !pInner->data.finished_semaphores || !pInner->data.in_flight_fences || !pInner->data.image_in_flight)
-        CR_LOG_ERR("auto", "bad alloc");
-    VkSemaphoreCreateInfo semaphore_info = {0};
-    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    VkFenceCreateInfo fence_info = {
-        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = VK_FENCE_CREATE_SIGNALED_BIT
-    };
-    for (CRUINT32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        if (
-            vkCreateSemaphore(pInner->device, &semaphore_info, NULL, &(pInner->data.available_semaphores[i])) != VK_SUCCESS ||
-            vkCreateSemaphore(pInner->device, &semaphore_info, NULL, &(pInner->data.finished_semaphores[i])) != VK_SUCCESS ||
-            vkCreateFence(pInner->device, &fence_info, NULL, &(pInner->data.in_flight_fences[i])) != VK_SUCCESS
-        )
-        CR_LOG_WAR("auto", "failed to create sync objects");
-    }
-    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
-        pInner->data.image_in_flight[i] = VK_NULL_HANDLE;
-}
-
-static void _inner_recreate_swap_chain_(PCR_VKSTRUCT pInner)
-{
-    vkDeviceWaitIdle(pInner->device);
-    //destroy
-    vkDestroyCommandPool(pInner->device, pInner->data.command_pool, NULL);
-    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
-        vkDestroyFramebuffer(pInner->device, pInner->data.framebuffers[i], NULL);
-    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
-        vkDestroyImageView(pInner->device, pInner->swapchain.swapchain_image_views[i], NULL);
-    //recreate
-    _inner_create_swapchain_(pInner);
-    _inner_create_frame_bffers_(pInner);
-    _inner_create_command_pool_(pInner);
-    _inner_create_command_buffers_(pInner);
-}
+    CRUINT32 current_buffer;
+    CRUINT32 queue_count;
+}cr_vk_inner;
 
 /**
- * create device -
- * create swapchain -
- * get queues -
- * create render pass -
- * create graphics pipline -
- * create frame buffers -
- * create command pool -
- * create command buffers -
- * create sync objects -
+ * 检查内存特性是否符合
  */
-#ifdef CR_WINDOWS
-cr_vk _inner_create_vk_(HWND hWnd, CRUINT32 w, CRUINT32 h)
+static CRBOOL _inner_memory_type_from_properties_(cr_vk_inner *pInner, CRUINT32 typeBits, VkFlags requirements_mask, uint32_t *typeIndex)
 {
-    PCR_VKSTRUCT pInner = CRAlloc(NULL, sizeof(CR_VKSTRUCT));
-    if (!pInner)
+    for (uint32_t i = 0; i < 32; i++)
     {
-        CR_LOG_ERR("auto", "bad alloc");
-        return NULL;
-    }
-    pInner->hWnd = hWnd;
-    VkWin32SurfaceCreateInfoKHR createInfo;
-    createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    createInfo.pNext = NULL;
-    createInfo.flags = 0;
-    createInfo.hinstance = GetModuleHandle(NULL);
-    createInfo.hwnd = pInner->hWnd;
-    if (vkCreateWin32SurfaceKHR(CR_VKINIT.instance, &createInfo, NULL, &(pInner->surface)) != VK_SUCCESS)
-    {
-        CR_LOG_WAR("auto", "failed to create surface");
-        CRAlloc(pInner, 0);
-        return NULL;
-    }
-    //
-    //检查窗口表面支持
-    VkBool32 present_support = 0;
-    for (int i = 0; i < CR_VKINIT.queue_family_count; i++)
-    {
-        vkGetPhysicalDeviceSurfaceSupportKHR(CR_VKINIT.physical_device, i, pInner->surface, &present_support);
-        if (present_support)
+        if ((typeBits & 1) == 1)
         {
-            pInner->present_family_index = i;
-            goto Success;
+            if ((pInner->memory_properties.memoryTypes[i].propertyFlags & requirements_mask) == requirements_mask)
+            {
+                *typeIndex = i;
+                return CRTRUE;
+            }
+        }
+        typeBits >>= 1;
+    }
+    return CRFALSE;
+}
+
+static void _inner_flush_init_cmd_(cr_vk_inner *pInner)
+{
+    //
+}
+
+/*
+ * Return 1 (true) if all layer names specified in check_names
+ * can be found in given layer properties.
+ */
+static CRBOOL _inner_check_layers_(
+    uint32_t check_count, char **check_names,
+    uint32_t layer_count,
+    VkLayerProperties *layers
+)
+{
+    for (uint32_t i = 0; i < check_count; i++) {
+        CRBOOL found = 0;
+        for (uint32_t j = 0; j < layer_count; j++) {
+            if (!strcmp(check_names[i], layers[j].layerName)) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            CR_LOG_ERR("auto", "Cannot find layer: %s", check_names[i]);
+            return CRFALSE;
         }
     }
-Failed:
-    CR_LOG_WAR("auto", "failed to found present family index");
-Success:
-    //创建逻辑设备
-    _inner_create_logical_device_(pInner);
-    //创建交换链
-    _inner_init_data_(pInner, w, h);
-    _inner_create_swapchain_(pInner);
-    //获取队列
-    _inner_get_queues_(pInner);
-    //创建图形管线
-    _inner_create_render_pass_(pInner);
-    _inner_create_pipeline_(pInner);
-    //创建帧缓冲
-    _inner_create_frame_bffers_(pInner);
-    //创建命令池
-    _inner_create_command_pool_(pInner);
-    _inner_create_command_buffers_(pInner);
-    //创建同步实例
-    _inner_create_sync_objects_(pInner);
+    return CRTRUE;
+}
+
+cr_vk _inner_create_vk_(
+    #ifdef CR_WINDOWS
+    HWND window,
+    #elif defined CR_LINUX
+    Display *dpy,
+    Window win
+    #endif
+    CRUINT32 w, CRUINT32 h
+)
+{
+    cr_vk_inner *pInner = CRAlloc(NULL, sizeof(cr_vk_inner));
+    if (!pInner) CR_LOG_ERR("auto", "bad alloc");
+    memset(pInner, 0, sizeof(*pInner));
+    //
+    #ifndef CRVK_NO_DBG
+    pInner->validate = CRTRUE;
+    #else
+    pInner->validate = CRFALSE;
+    #endif
+    //
+    VkResult err;
+    char *extension_names[64];
+    CRUINT32 instance_extension_count = 0;
+    CRUINT32 instance_layer_count = 0;
+    CRUINT32 device_validation_layer_count = 0;
+    CRUINT32 enabled_extension_count = 0;
+    CRUINT32 enabled_layer_count = 0;
+    //
+    char *instance_validation_layers[] ={
+        "VK_LAYER_LUNARG_threading",      "VK_LAYER_LUNARG_mem_tracker",
+        "VK_LAYER_LUNARG_object_tracker", "VK_LAYER_LUNARG_draw_state",
+        "VK_LAYER_LUNARG_param_checker",  "VK_LAYER_LUNARG_swapchain",
+        "VK_LAYER_LUNARG_device_limits",  "VK_LAYER_LUNARG_image",
+        "VK_LAYER_GOOGLE_unique_objects"
+    };
+    pInner->device_validation_layers[0] = "VK_LAYER_LUNARG_threading";
+    pInner->device_validation_layers[1] = "VK_LAYER_LUNARG_mem_tracker";
+    pInner->device_validation_layers[2] = "VK_LAYER_LUNARG_object_tracker";
+    pInner->device_validation_layers[3] = "VK_LAYER_LUNARG_draw_state";
+    pInner->device_validation_layers[4] = "VK_LAYER_LUNARG_param_checker";
+    pInner->device_validation_layers[5] = "VK_LAYER_LUNARG_swapchain";
+    pInner->device_validation_layers[6] = "VK_LAYER_LUNARG_device_limits";
+    pInner->device_validation_layers[7] = "VK_LAYER_LUNARG_image";
+    pInner->device_validation_layers[8] = "VK_LAYER_GOOGLE_unique_objects";
+    device_validation_layer_count = 9;
+    //
+    CRBOOL validation_found = CRFALSE;
+    err = vkEnumerateInstanceLayerProperties(&instance_layer_count, NULL);
+    if (err) CR_LOG_ERR("auto", "failed to enumerate instance layer properties!");
+    if (instance_layer_count)
+    {
+        VkLayerProperties *instance_layers = CRAlloc(NULL, sizeof(VkLayerProperties) * instance_layer_count);
+        if (!instance_layers) CR_LOG_ERR("auto", "bad alloc");
+        err = vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layers);
+        if (err) CR_LOG_ERR("auto", "failed to enumerate instance layer properties!");
+        if (pInner->validate)
+        {
+            validation_found = _inner_check_layers_(
+                ARRAY_SIZE(instance_validation_layers),
+                instance_validation_layers, instance_layer_count,
+                instance_layers
+            );
+            enabled_layer_count = ARRAY_SIZE(instance_validation_layers);
+        }
+        CRAlloc(instance_layers, 0);
+    }
+    if (pInner->validate && !validation_found) CR_LOG_ERR("auto", "failed to find required validation layer!");
+    //查看实例扩展
+    CRBOOL surfaceExtFound = CRFALSE;
+    CRBOOL platformSurfaceExtFound = CRFALSE;
+    memset(extension_names, 0, sizeof(extension_names));
+    err = vkEnumerateInstanceExtensionProperties(NULL, &instance_extension_count, NULL);
+    if (err) CR_LOG_ERR("auto", "failed to enumerate instance extension properties");
+    if (instance_extension_count)
+    {
+        
+    }
     //
     return pInner;
 }
-#elif defined CR_LINUX
-cr_vk _inner_create_vk_(Display* dpy, Window win, CRUINT32 w, CRUINT32 h)
-{
-    PCR_VKSTRUCT pInner = CRAlloc(NULL, sizeof(CR_VKSTRUCT));
-    if (!pInner)
-    {
-        CR_LOG_ERR("auto", "bad alloc");
-        return NULL;
-    }
-    pInner->pDisplay = dpy;
-    pInner->window = win;
-    VkXlibSurfaceCreateInfoKHR createInfo;
-    createInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    createInfo.dpy = pInner->pDisplay;
-    createInfo.window = pInner->window;
-    if (vkCreateXlibSurfaceKHR(CR_VKINIT.instance, &createInfo, NULL, &(pInner->surface)) != VK_SUCCESS)
-    {
-        CR_LOG_WAR("auto", "failed to create surface");
-        CRAlloc(pInner, 0);
-        return NULL;
-    }
-    //
-    //检查窗口表面支持
-    VkBool32 present_support = 0;
-    for (int i = 0; i < CR_VKINIT.queue_family_count; i++)
-    {
-        vkGetPhysicalDeviceSurfaceSupportKHR(CR_VKINIT.physical_device, i, pInner->surface, &present_support);
-        if (present_support)
-        {
-            pInner->present_family_index = i;
-            goto CRSuccess;
-        }
-    }
-Failed:
-    CR_LOG_WAR("auto", "failed to found present family index");
-CRSuccess:
-    //创建逻辑设备
-    _inner_create_logical_device_(pInner);
-    //创建交换链
-    _inner_init_data_(pInner, w, h);
-    _inner_create_swapchain_(pInner);
-    //获取队列
-    _inner_get_queues_(pInner);
-    //创建图形管线
-    _inner_create_render_pass_(pInner);
-    _inner_create_pipeline_(pInner);
-    //创建命令池
-    _inner_create_command_pool_(pInner);
-    _inner_create_command_buffers_(pInner);
-    //创建同步实例
-    _inner_create_sync_objects_(pInner);
-    //
-    return pInner;
-}
-#endif
 
-void _inner_release_vk_(cr_vk vk)
+void _inner_destroy_vk_(cr_vk vk)
 {
-    PCR_VKSTRUCT pInner = (PCR_VKSTRUCT)vk;
-    //释放同步实例
-    for (CRUINT32 i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-    {
-        vkDestroySemaphore(pInner->device, pInner->data.finished_semaphores[i], NULL);
-        vkDestroySemaphore(pInner->device, pInner->data.available_semaphores[i], NULL);
-        vkDestroyFence(pInner->device, pInner->data.in_flight_fences[i], NULL);
-    }
-    CRAlloc(pInner->data.finished_semaphores, 0);
-    CRAlloc(pInner->data.available_semaphores, 0);
-    CRAlloc(pInner->data.in_flight_fences, 0);
-    CRAlloc(pInner->data.image_in_flight, 0);
-    //释放指令缓冲
-    vkDestroyCommandPool(pInner->device, pInner->data.command_pool, NULL);
-    CRAlloc(pInner->data.command_buffers, 0);
-    //释放帧缓冲
-    for (CRUINT32 i = 0; i < pInner->swapchain.image_count; i++)
-        vkDestroyFramebuffer(pInner->device, pInner->data.framebuffers[i], NULL);
-    CRAlloc(pInner->data.framebuffers, 0);
-    //释放管线
-    vkDestroyPipeline(pInner->device, pInner->data.graphics_pipeline, NULL);
-    vkDestroyPipelineLayout(pInner->device, pInner->data.pipeline_layout, NULL);
-    vkDestroyRenderPass(pInner->device, pInner->data.render_pass, NULL);
-    //释放交换链
-    for (int i = 0; i < pInner->swapchain.image_count; i++)
-        vkDestroyImageView(pInner->device, pInner->swapchain.swapchain_image_views[i], NULL);
-    CRAlloc(pInner->swapchain.swapchain_image_views, 0);
-    CRAlloc(pInner->swapchain.swapchain_images, 0);
-    vkDestroySwapchainKHR(pInner->device, pInner->swapchain.swapchain, NULL);
-    //释放设备
-    vkDestroyDevice(pInner->device, NULL);
-    vkDestroySurfaceKHR(CR_VKINIT.instance, pInner->surface, NULL);
-}
-
-void _inner_paint_ui_(cr_vk vk)
-{
-    // PCR_VKSTRUCT pInner = (PCR_VKSTRUCT)vk;
-    // vkWaitForFences(pInner->device, 1, pInner->data.in_flight_fences[pInner->data.current_frame], VK_TRUE, UINT64_MAX);
-    // CRUINT32 image_index = 0;
-    // VkResult result = vkAcquireNextImageKHR(pInner->device, pInner->swapchain.swapchain, UINT64_MAX, pInner->data.available_semaphores[pInner->data.current_frame], VK_NULL_HANDLE, &image_index);
-    // if (result == VK_ERROR_OUT_OF_DATE_KHR)
-    // {
-    //     _inner_recreate_swap_chain_(pInner);
-    //     return;
-    // }
-    // else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR)
-    // {
-    //     CR_LOG_ERR("auto", "failed to acquire swapchain image!");
-    //     return;
-    // }
-    // if (pInner->data.image_in_flight[image_index] != VK_NULL_HANDLE)
-    //     vkWaitForFences(pInner->device, 1, &(pInner->data.image_in_flight[image_index]), VK_TRUE, UINT64_MAX);
-    // pInner->data.image_in_flight[image_index] = pInner->data.in_flight_fences[pInner->data.current_frame];
-    
+    cr_vk_inner *pInner = (cr_vk_inner*)vk;
+    //
+    CRAlloc(pInner, 0);
 }

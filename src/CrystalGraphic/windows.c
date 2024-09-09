@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-23 00:38:41
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-08 23:22:08
+ * @LastEditTime: 2024-09-09 22:13:47
  * @FilePath: \CrystalEngine\src\CrystalGraphic\windows.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -56,7 +56,7 @@ static LRESULT AfterProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, PCRW
     switch (msg)
     {
         case WM_PAINT:
-            _inner_paint_ui_(pInner->vkui);
+            // _inner_paint_ui_(pInner->vkui);
             break;
         case WM_MOUSEMOVE:
             if (inf.y > 0)
@@ -161,6 +161,7 @@ LRESULT WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (!pInner->funcs[CRWINDOW_QUIT_CB](&inf))
             DestroyWindow(hWnd);
         CR_LOG_IFO("auto", "Close window");
+        _inner_destroy_vk_(pInner->vkui);
         return 0;
     }
     else if (msg == WM_DESTROY)
@@ -219,7 +220,7 @@ static void _inner_paint_ui_thread_(CRLVOID data, CRTHREAD idThis)
     while (pInner->onProcess)
     {
         SendMessage(pInner->hWnd, WM_PAINT, 0, 0);
-        CRSleep(100);
+        CRSleep(1000);
     }
 }
 

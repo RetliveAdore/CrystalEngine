@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-06-23 00:42:19
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-06 20:51:54
+ * @LastEditTime: 2024-09-09 19:13:01
  * @FilePath: \CrystalEngine\src\CrystalGraphic\init.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -62,7 +62,6 @@ CRAPI CRBOOL CRModInit(void **ptr)
     #elif defined CR_LINUX
     back = _inner_x_init_();
     #endif
-    _inner_init_vk_();
     return back;
 }
 
@@ -73,7 +72,6 @@ CRAPI void CRModUninit(void)
     #elif defined CR_LINUX
     _inner_x_uninit_();
     #endif
-    _inner_uninit_vk_();
     if (lock) CRLockRelease(lock);
 }
 

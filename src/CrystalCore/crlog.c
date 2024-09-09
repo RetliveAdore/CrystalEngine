@@ -2,8 +2,8 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-05-29 18:26:08
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-06-18 15:59:02
- * @FilePath: \CrystalCore\src\crlog.c
+ * @LastEditTime: 2024-09-09 19:35:11
+ * @FilePath: \CrystalEngine\src\CrystalCore\crlog.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
  */

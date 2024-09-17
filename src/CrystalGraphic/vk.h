@@ -26,7 +26,7 @@ cr_vk _inner_create_vk_(
     HWND window,
 #elif defined CR_LINUX
     Display *dpy,
-    Window win
+    Window win,
 #endif
     CRUINT32 w, CRUINT32 h
 );

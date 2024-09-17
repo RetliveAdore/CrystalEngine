@@ -285,13 +285,13 @@ static void _inner_window_thread_(CRLVOID data, CRTHREAD idThis)
 static void _inner_paint_ui_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = (PCRWINDOWINNER)data;
-    pInner->vlui= _inner_create_vk_(pDisplay, pInner->win, pInner->w, pInner->h);
+    pInner->vkui= _inner_create_vk_(pDisplay, pInner->win, pInner->w, pInner->h);
     while (pInner->onProcess)
     {
         CRSleep(100);
     }
     //释放
-    _inner_release_vk_(pInner->vkui);
+    _inner_destroy_vk_(pInner->vkui);
     pInner->vkui = NULL;
 }
 

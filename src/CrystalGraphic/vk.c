@@ -10,6 +10,7 @@
 #include "vk.h"
 #include <resources.h>
 #include <stdio.h>
+#include <string.h>
 
 //用于控制是否启用验证层
 #define CRVK_NO_DBG
@@ -283,9 +284,17 @@ static void _inner_init_swapchain_(
         .hwnd = window
     };
     err = vkCreateWin32SurfaceKHR(pInner->inst, &createInfo, NULL, &pInner->surface);
-    if (err) CR_LOG_ERR("auto", "failed to create surface");
     #elif defined CR_LINUX
+    VkXlibSurfaceCreateInfoKHR createInfo = {
+        .sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
+        .pNext = NULL,
+        .flags = 0,
+        .dpy = dpy,
+        .window = win
+    };
+    err = vkCreateXlibSurfaceKHR(pInner->inst, &createInfo, NULL, &pInner->surface);
     #endif
+    if (err) CR_LOG_ERR("auto", "failed to create surface");
     VkBool32 *supportPresent = (VkBool32*)CRAlloc(NULL, pInner->queue_count * sizeof(VkBool32));
     if (!supportPresent) CR_LOG_ERR("auto", "bad alloc");
     for (i = 0; i < pInner->queue_count; i++)
@@ -666,7 +675,7 @@ cr_vk _inner_create_vk_(
     HWND window,
 #elif defined CR_LINUX
     Display *dpy,
-    Window win
+    Window win,
 #endif
     CRUINT32 w, CRUINT32 h
 )
@@ -760,7 +769,11 @@ cr_vk _inner_create_vk_(
                 instance_extensions[i].extensionName))
             {
                 platformSurfaceExtFound = CRTRUE;
+                #ifdef CR_WINDOWS
                 extension_names[enabled_extension_count++] = VK_KHR_WIN32_SURFACE_EXTENSION_NAME;
+                #elif defined CR_LINUX
+                extension_names[enabled_extension_count++] = VK_KHR_XLIB_SURFACE_EXTENSION_NAME;
+                #endif
             }
             if (!strcmp(VK_EXT_DEBUG_REPORT_EXTENSION_NAME, instance_extensions[i].extensionName))
             {
@@ -939,7 +952,11 @@ Succeed:
     GET_INSTANCE_PROC_ADDR(pInner->inst, GetPhysicalDeviceSurfacePresentModesKHR);
     GET_INSTANCE_PROC_ADDR(pInner->inst, GetSwapchainImagesKHR);
     //
+    #ifdef CR_WINDOWS
     _inner_init_swapchain_(pInner, window);
+    #elif defined CR_LINUX
+    _inner_init_swapchain_(pInner, dpy, win);
+    #endif
     //
     _inner_create_pipeline_(pInner);
     //

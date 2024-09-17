@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 21:36:50
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-17 18:00:25
+ * @LastEditTime: 2024-09-17 21:51:23
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.c
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -620,12 +620,131 @@ static void _inner_deprepare_depth_(cr_vk_inner *pInner)
 
 static void _inner_prepare_textures_(cr_vk_inner *pInner)
 {
-    CR_LOG_DBG("auto", "prepare textures");
+    //当前尚未开始编写纹理系统
+    //
+    //留空
 }
 
 static void _inner_deprepare_textures_(cr_vk_inner *pInner)
 {
+}
 
+//导入shader程序
+static void _inner_prepare_descriptor_layout_(cr_vk_inner *pInner)
+{
+    const VkDescriptorSetLayoutBinding layout_bindings[2] = {
+        [0] = {
+            .binding = 0,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .descriptorCount = 0,  //shader接收的传入对象数量，现在没有传入任何对象
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+            .pImmutableSamplers = NULL
+        },
+        [1] = {
+            .binding = 1,
+            .descriptorCount = 0,  //shader接收的传入对象数量，现在没有传入任何对象
+            .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+            .pImmutableSamplers = NULL
+        }
+    };
+    const VkDescriptorSetLayoutCreateInfo descriptor_layout = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .bindingCount = 2,
+        .pBindings = layout_bindings
+    };
+    VkResult err;
+    err = vkCreateDescriptorSetLayout(pInner->device, &descriptor_layout, NULL, &pInner->desc_layout);
+    if (err) CR_LOG_ERR("auto", "failed to create descriptor set layout!");
+    //
+    const VkPipelineLayoutCreateInfo pipelineCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .setLayoutCount = 1,
+        .pSetLayouts = &pInner->desc_layout
+    };
+    err = vkCreatePipelineLayout(pInner->device, &pipelineCreateInfo, NULL, &pInner->pipeline_layout);
+    if (err) CR_LOG_ERR("auto", "failed to create pipeline layout!");
+}
+
+static void _inner_deprepare_descriptor_layout_(cr_vk_inner *pInner)
+{
+    vkDestroyPipelineLayout(pInner->device, pInner->pipeline_layout, NULL);
+    vkDestroyDescriptorSetLayout(pInner->device, pInner->desc_layout, NULL);
+}
+
+static void _inner_prepare_render_pass_(cr_vk_inner *pInner)
+{
+    const VkAttachmentDescription attachments[2] = {
+        [0] = {
+            .format = pInner->format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+        },
+        [1] = {
+            .format = pInner->depth.format,
+            .samples = VK_SAMPLE_COUNT_1_BIT,
+            .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+            .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+            .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+            .initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+        }
+    };
+    const VkAttachmentReference color_reference = {
+        .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+    };
+    const VkAttachmentReference depth_reference = {
+        .attachment = 1, .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+    };
+    const VkSubpassDescription subpass = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .flags = 0,
+        .inputAttachmentCount = 0,
+        .pInputAttachments = NULL,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color_reference,
+        .pResolveAttachments = NULL,
+        .pDepthStencilAttachment = &depth_reference,
+        .preserveAttachmentCount = 0,
+        .pPreserveAttachments = NULL
+    };
+    const VkRenderPassCreateInfo rp_info = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .attachmentCount = 2,
+        .pAttachments = attachments,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+        .dependencyCount = 0,
+        .pDependencies = NULL
+    };
+    VkResult err;
+    err = vkCreateRenderPass(pInner->device, &rp_info, NULL, &pInner->render_pass);
+}
+
+static void _inner_deprepare_render_pass_(cr_vk_inner *pInner)
+{
+    vkDestroyRenderPass(pInner->device, pInner->render_pass, NULL);
+}
+
+static void _inner_prepare_pipeline_(cr_vk_inner *pInner)
+{
+    CR_LOG_DBG("auto", "prepare pipeline");
+}
+
+static void _inner_deprepare_pipeline_(cr_vk_inner *pInner)
+{
+    
 }
 
 static void _inner_create_pipeline_(cr_vk_inner *pInner)
@@ -650,10 +769,20 @@ static void _inner_create_pipeline_(cr_vk_inner *pInner)
     _inner_prepare_buffers_(pInner);
     _inner_prepare_depth_(pInner);
     _inner_prepare_textures_(pInner);
+    //
+    _inner_prepare_descriptor_layout_(pInner);
+    _inner_prepare_render_pass_(pInner);
+    _inner_prepare_pipeline_(pInner);
+    //
 }
 
 static void _inner_destroy_pipeline_(cr_vk_inner *pInner)
 {
+    //
+    _inner_deprepare_pipeline_(pInner);
+    _inner_deprepare_render_pass_(pInner);
+    _inner_deprepare_descriptor_layout_(pInner);
+    //
     _inner_deprepare_textures_(pInner);
     _inner_deprepare_depth_(pInner);
     _inner_deprepare_buffers_(pInner);

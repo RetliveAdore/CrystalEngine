@@ -2,7 +2,7 @@
  * @Author: RetliveAdore lizaterop@gmail.com
  * @Date: 2024-08-18 22:07:38
  * @LastEditors: RetliveAdore lizaterop@gmail.com
- * @LastEditTime: 2024-09-09 22:14:21
+ * @LastEditTime: 2024-09-10 19:04:05
  * @FilePath: \CrystalEngine\src\CrystalGraphic\vk.h
  * @Description: 
  * Coptright (c) 2024 by RetliveAdore-lizaterop@gmail.com, All Rights Reserved. 
@@ -21,11 +21,15 @@
 
 typedef CRLVOID cr_vk;
 
+cr_vk _inner_create_vk_(
 #ifdef CR_WINDOWS
-cr_vk _inner_create_vk_(HWND hWnd, CRUINT32 w, CRUINT32 h);
+    HWND window,
 #elif defined CR_LINUX
-cr_vk _inner_create_vk_(Display *dpy, Window win, CRUINT32 w, CRUINT32 h);
+    Display *dpy,
+    Window win
 #endif
+    CRUINT32 w, CRUINT32 h
+);
 
 void _inner_destroy_vk_(cr_vk vk);
 

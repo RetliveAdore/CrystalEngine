@@ -100,30 +100,30 @@ out\objs\shader\\%.o : shader\\%.glsl
 	@ld -r -b binary $^ -o $@
 
 out\objs\\%.o : %.c
-	@gcc -fvisibility=hidden -fPIC -c $^ -o $@ $(INCLUDE_PATH)
+	@gcc -fexec-charset=GBK -fPIC -c $^ -o $@ $(INCLUDE_PATH)
 
 core : $(OBJ_MOD_FILES_CORE) $(OBJ_CORE_FILES_CORE)
 	@ar rcs out/Windows/libCrystalCore.a $(OBJ_CORE_FILES_CORE)
-	@gcc -shared -o out/Windows/CrystalCore.so $(OBJ_MOD_FILES_CORE) $(INCLUDE_PATH) $(LIBRARIES)
+	@gcc -fexec-charset=GBK -shared -o out/Windows/CrystalCore.so $(OBJ_MOD_FILES_CORE) $(INCLUDE_PATH) $(LIBRARIES)
 
 algorithms : $(OBJ_MOD_FILES_ALG) $(OBJ_CORE_FILES_ALG)
 	@ar rcs out/Windows/libCrystalAlgorithms.a $(OBJ_CORE_FILES_ALG)
-	@gcc -shared -o out/Windows/CrystalAlgorithms.so $(OBJ_MOD_FILES_ALG) $(INCLUDE_PATH) $(LIBRARIES)
+	@gcc -fexec-charset=GBK -shared -o out/Windows/CrystalAlgorithms.so $(OBJ_MOD_FILES_ALG) $(INCLUDE_PATH) $(LIBRARIES)
 
 thread : $(OBJ_MOD_FILES_THR) $(OBJ_CORE_FILES_THR)
 	@ar rcs out/Windows/libCrystalThread.a $(OBJ_CORE_FILES_THR)
-	@gcc -shared -o out/Windows/CrystalThread.so $(OBJ_MOD_FILES_THR) $(INCLUDE_PATH) $(LIBRARIES)
+	@gcc -fexec-charset=GBK -shared -o out/Windows/CrystalThread.so $(OBJ_MOD_FILES_THR) $(INCLUDE_PATH) $(LIBRARIES)
 
 audio : $(OBJ_MOD_FILES_AUDIO) $(OBJ_CORE_FILES_AUDIO)
 	@ar rcs out/Windows/libCrystalAudio.a $(OBJ_CORE_FILES_AUDIO)
-	@gcc -shared -o out/Windows/CrystalAudio.so $(OBJ_MOD_FILES_AUDIO) $(INCLUDE_PATH) $(LIBRARIES)
+	@gcc -fexec-charset=GBK -shared -o out/Windows/CrystalAudio.so $(OBJ_MOD_FILES_AUDIO) $(INCLUDE_PATH) $(LIBRARIES)
 
 graphic : $(OBJ_MOD_FILES_GRC) $(OBJ_CORE_FILES_GRC) $(OBJ_SHADER_FILES) $(VERTOBJ_SHADER_FILES) $(FRAGOBJ_SHADER_FILES)
 	@ar rcs out/Windows/libCrystalGraphic.a $(OBJ_CORE_FILES_GRC)
-	@gcc -shared -o out/Windows/CrystalGraphic.so $(OBJ_MOD_FILES_GRC) $(OBJ_SHADER_FILES) $(VERTOBJ_SHADER_FILES) $(FRAGOBJ_SHADER_FILES) $(INCLUDE_PATH) $(LIBRARIES)
+	@gcc -fexec-charset=GBK -shared -o out/Windows/CrystalGraphic.so $(OBJ_MOD_FILES_GRC) $(OBJ_SHADER_FILES) $(VERTOBJ_SHADER_FILES) $(FRAGOBJ_SHADER_FILES) $(INCLUDE_PATH) $(LIBRARIES)
 
 build : clean core algorithms thread audio graphic
-	@gcc -o out/Windows/app.exe $(APP_FILES) $(INCLUDE_PATH) -L.\out\Windows $(APP_DEPENDS)
+	@gcc -fexec-charset=GBK -o out/Windows/app.exe $(APP_FILES) $(INCLUDE_PATH) -L.\out\Windows $(APP_DEPENDS)
 
 run :
 	@.\out\Windows\app.exe

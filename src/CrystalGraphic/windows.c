@@ -56,7 +56,7 @@ static LRESULT AfterProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam, PCRW
     switch (msg)
     {
         case WM_PAINT:
-            // _inner_paint_ui_(pInner->vkui);
+            _inner_paint_ui_(pInner->vkui);
             break;
         case WM_MOUSEMOVE:
             if (inf.y > 0)
@@ -180,7 +180,7 @@ static void _inner_window_thread_(CRLVOID data, CRTHREAD idThis)
 {
     PCRWINDOWINNER pInner = data;
     DWORD style = WS_POPUP;
-    style = WS_OVERLAPPEDWINDOW;
+    //style = WS_OVERLAPPEDWINDOW;
     pInner->hWnd = CreateWindow(
         CR_WNDCLASS_NAME,
         pInner->prop->title, style,

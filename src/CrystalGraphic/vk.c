@@ -17,6 +17,8 @@
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
+#define NUM_DYNAMIC_STATS 2
+
 /**
  * 追踪所有纹理相关的实体
  */
@@ -737,14 +739,139 @@ static void _inner_deprepare_render_pass_(cr_vk_inner *pInner)
     vkDestroyRenderPass(pInner->device, pInner->render_pass, NULL);
 }
 
+static VkShaderModule _inner_prepare_shader_(cr_vk_inner *pInner, void* code, CRUINT64 size, VkShaderModule *pModule)
+{
+    VkShaderModule module;
+    VkShaderModuleCreateInfo moduleCreateInfo = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .codeSize = size,
+        .pCode = code
+    };
+    VkResult err = vkCreateShaderModule(pInner->device, &moduleCreateInfo, NULL, &module);
+    if (err) CR_LOG_ERR("auto", "failed to create shader module!");
+    return module;
+}
+
 static void _inner_prepare_pipeline_(cr_vk_inner *pInner)
 {
-    CR_LOG_DBG("auto", "prepare pipeline");
+    VkGraphicsPipelineCreateInfo pipeline;
+    VkPipelineCacheCreateInfo pipelineCache;
+    VkPipelineVertexInputStateCreateInfo vi;
+    VkPipelineInputAssemblyStateCreateInfo ia;
+    VkPipelineRasterizationStateCreateInfo rs;
+    VkPipelineColorBlendStateCreateInfo cb;
+    VkPipelineDepthStencilStateCreateInfo ds;
+    VkPipelineViewportStateCreateInfo vp;
+    VkPipelineMultisampleStateCreateInfo ms;
+    VkDynamicState dynamicStateEnables[NUM_DYNAMIC_STATS];
+    VkPipelineDynamicStateCreateInfo dynamicState;
+    VkResult err;
+    //
+    memset(dynamicStateEnables, 0, sizeof dynamicStateEnables);
+    memset(&dynamicState, 0, sizeof dynamicState);
+    dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dynamicState.pDynamicStates = dynamicStateEnables;
+    //
+    memset(&pipeline, 0, sizeof(pipeline));
+    pipeline.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipeline.layout = pInner->pipeline_layout;
+    //
+    memset(&vi, 0, sizeof(vi));
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    //
+    memset(&ia, 0, sizeof(ia));
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    //
+    memset(&rs, 0, sizeof(rs));
+    rs.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_BACK_BIT;
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.depthClampEnable = VK_FALSE;
+    rs.rasterizerDiscardEnable = VK_FALSE;
+    rs.depthBiasEnable = VK_FALSE;
+    //
+    memset(&cb, 0, sizeof(cb));
+    cb.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    VkPipelineColorBlendAttachmentState att_state[1];
+    memset(att_state, 0, sizeof(att_state));
+    att_state[0].colorWriteMask = 0xf;
+    att_state[0].blendEnable = VK_FALSE;
+    cb.attachmentCount = 1;
+    cb.pAttachments = att_state;
+    //
+    memset(&vp, 0, sizeof(vp));
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    dynamicStateEnables[dynamicState.dynamicStateCount++] =
+        VK_DYNAMIC_STATE_VIEWPORT;
+    vp.scissorCount = 1;
+    dynamicStateEnables[dynamicState.dynamicStateCount++] =
+        VK_DYNAMIC_STATE_SCISSOR;
+    //
+    memset(&ds, 0, sizeof(ds));
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_TRUE;
+    ds.depthWriteEnable = VK_TRUE;
+    ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+    ds.depthBoundsTestEnable = VK_FALSE;
+    ds.back.failOp = VK_STENCIL_OP_KEEP;
+    ds.back.passOp = VK_STENCIL_OP_KEEP;
+    ds.back.compareOp = VK_COMPARE_OP_ALWAYS;
+    ds.stencilTestEnable = VK_FALSE;
+    ds.front = ds.back;
+    //
+    memset(&ms, 0, sizeof(ms));
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.pSampleMask = NULL;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    //
+    // Two stages: vs and fs
+    pipeline.stageCount = 2;
+    VkPipelineShaderStageCreateInfo shaderStages[2];
+    memset(&shaderStages, 0, 2 * sizeof(VkPipelineShaderStageCreateInfo));
+    //
+    shaderStages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    CRUINT64 sizeVert = (CRUINT64)&_binary_out_objs_shader_defaultshader_vert_spv_size;
+    shaderStages[0].module = _inner_prepare_shader_(pInner, &_binary_out_objs_shader_defaultshader_vert_spv_start, sizeVert, &pInner->vert_shader_module);
+    shaderStages[0].pName = "main";
+    //
+    shaderStages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    shaderStages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    CRUINT64 sizeFrag = (CRUINT64)&_binary_out_objs_shader_defaultshader_frag_spv_size;
+    shaderStages[1].module = _inner_prepare_shader_(pInner, &_binary_out_objs_shader_defaultshader_frag_spv_start, sizeFrag, &pInner->frag_shader_module);
+    shaderStages[1].pName = "main";
+    //
+    memset(&pipelineCache, 0, sizeof(pipelineCache));
+    pipelineCache.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
+    //
+    err = vkCreatePipelineCache(pInner->device, &pipelineCache, NULL, &pInner->pipelineCache);
+    if (err) CR_LOG_ERR("auto", "failed to create pipeline cache!");
+    pipeline.pVertexInputState = &vi;
+    pipeline.pInputAssemblyState = &ia;
+    pipeline.pRasterizationState = &rs;
+    pipeline.pColorBlendState = &cb;
+    pipeline.pMultisampleState = &ms;
+    pipeline.pViewportState = &vp;
+    pipeline.pDepthStencilState = &ds;
+    pipeline.pStages = shaderStages;
+    pipeline.renderPass = pInner->render_pass;
+    pipeline.pDynamicState = &dynamicState;
+    //
+    err = vkCreateGraphicsPipelines(pInner->device, pInner->pipelineCache, 1, &pipeline, NULL, &pInner->pipeline);
+    if (err) CR_LOG_ERR("auto", "failed to create craphics pipelines!");
+    vkDestroyShaderModule(pInner->device, pInner->vert_shader_module, NULL);
+    vkDestroyShaderModule(pInner->device, pInner->frag_shader_module, NULL);
 }
 
 static void _inner_deprepare_pipeline_(cr_vk_inner *pInner)
 {
-    
+    vkDestroyPipeline(pInner->device, pInner->pipeline, NULL);
+    vkDestroyPipelineCache(pInner->device, pInner->pipelineCache, NULL);
 }
 
 static void _inner_create_pipeline_(cr_vk_inner *pInner)

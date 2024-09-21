@@ -18,6 +18,7 @@
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 #define NUM_DYNAMIC_STATS 2
+#define CR_TEXTURE_COUNT 0
 
 /**
  * 追踪所有纹理相关的实体
@@ -149,7 +150,7 @@ typedef struct vk_inner{
     VkShaderModule vert_shader_module;
     VkShaderModule frag_shader_module;
     //
-    VkDescriptorPool decs_pool;
+    VkDescriptorPool desc_pool;
     VkDescriptorSet desc_set;
     //
     VkFramebuffer *frameBuffers;
@@ -644,7 +645,7 @@ static void _inner_prepare_descriptor_layout_(cr_vk_inner *pInner)
         },
         [1] = {
             .binding = 1,
-            .descriptorCount = 0,  //shader接收的传入对象数量，现在没有传入任何对象
+            .descriptorCount = CR_TEXTURE_COUNT,  //shader接收的传入对象数量，现在没有传入任何对象
             .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
             .pImmutableSamplers = NULL
         }
@@ -874,6 +875,68 @@ static void _inner_deprepare_pipeline_(cr_vk_inner *pInner)
     vkDestroyPipelineCache(pInner->device, pInner->pipelineCache, NULL);
 }
 
+static void _inner_prepare_descriptor_pool_(cr_vk_inner *pInner)
+{
+    const VkDescriptorPoolSize type_counts[2] = {
+            [0] = {
+                .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                .descriptorCount = 1,
+            },
+            [1] = {
+                .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                .descriptorCount = CR_TEXTURE_COUNT,
+            },
+    };
+    const VkDescriptorPoolCreateInfo descriptor_pool = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .pNext = NULL,
+        .maxSets = 1,
+        .poolSizeCount = 2,
+        .pPoolSizes = type_counts,
+    };
+    VkResult err = vkCreateDescriptorPool(pInner->device, &descriptor_pool, NULL, &pInner->desc_pool);
+    if (err) CR_LOG_ERR("auto", "failed to create descriptor pool!");
+}
+
+static void _inner_deprepare_descriptor_pool_(cr_vk_inner *pInner)
+{
+    vkDestroyDescriptorPool(pInner->device, pInner->desc_pool, NULL);
+}
+
+static void _inner_prepare_framebuffers_(cr_vk_inner *pInner)
+{
+    VkImageView attachments[2];
+    attachments[1] = pInner->depth.view;
+    const VkFramebufferCreateInfo fb_info = {
+        .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .pNext = NULL,
+        .flags = 0,
+        .renderPass = pInner->render_pass,
+        .attachmentCount = 2,
+        .pAttachments = attachments,
+        .width = pInner->width,
+        .height = pInner->height,
+        .layers = 1
+    };
+    VkResult err;
+    CRUINT32 i;
+    pInner->frameBuffers = CRAlloc(NULL, sizeof(VkFramebuffer) * pInner->swapchainImageCount);
+    if (!pInner->frameBuffers) CR_LOG_ERR("auto", "bad alloc");
+    for (i = 0; i < pInner->swapchainImageCount; i++)
+    {
+        attachments[0] = pInner->buffers[i].view;
+        err = vkCreateFramebuffer(pInner->device, &fb_info, NULL, &pInner->frameBuffers[i]);
+        if (err) CR_LOG_ERR("auto", "failed to create frame buffer!");
+    }
+}
+
+static void _inner_deprepare_framebuffers_(cr_vk_inner *pInner)
+{
+    for (CRUINT32 i = 0; i < pInner->swapchainImageCount; i++)
+        vkDestroyFramebuffer(pInner->device, pInner->frameBuffers[i], NULL);
+    CRAlloc(pInner->frameBuffers, 0);
+}
+
 static void _inner_create_pipeline_(cr_vk_inner *pInner)
 {
     VkResult err;
@@ -901,10 +964,23 @@ static void _inner_create_pipeline_(cr_vk_inner *pInner)
     _inner_prepare_render_pass_(pInner);
     _inner_prepare_pipeline_(pInner);
     //
+    for (CRUINT32 i = 0; i < pInner->swapchainImageCount; i++)
+    {
+        err = vkAllocateCommandBuffers(pInner->device, &cmd, &pInner->buffers[i].cmd);
+        if (err) CR_LOG_ERR("auto", "failed to allocate command buffers!");
+    }
+    //创建描述符池，该池中保存有纹理对象之类的描述符
+    _inner_prepare_descriptor_pool_(pInner);
+    _inner_prepare_framebuffers_(pInner);
 }
 
 static void _inner_destroy_pipeline_(cr_vk_inner *pInner)
 {
+    _inner_deprepare_framebuffers_(pInner);
+    _inner_deprepare_descriptor_pool_(pInner);
+    //
+    for (CRUINT32 i = 0; i < pInner->swapchainImageCount; i++)
+        vkFreeCommandBuffers(pInner->device, pInner->cmd_pool, 1, &pInner->buffers[i].cmd);
     //
     _inner_deprepare_pipeline_(pInner);
     _inner_deprepare_render_pass_(pInner);

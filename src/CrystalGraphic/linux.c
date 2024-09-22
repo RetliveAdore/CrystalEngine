@@ -288,6 +288,7 @@ static void _inner_paint_ui_thread_(CRLVOID data, CRTHREAD idThis)
     pInner->vkui= _inner_create_vk_(pDisplay, pInner->win, pInner->w, pInner->h);
     while (pInner->onProcess)
     {
+        _inner_paint_ui_(pInner->vkui);
         CRSleep(100);
     }
     //释放

@@ -12,288 +12,7 @@
 #include <stdio.h>
 #include <string.h>
 
-//用于控制是否启用验证层
-#define CRVK_NO_DBG
-
-#define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
-
-#define NUM_DYNAMIC_STATS 2
-#define CR_TEXTURE_COUNT 0
-
-/**
- * 追踪所有纹理相关的实体
- */
-typedef struct{
-    VkSampler sampler;
-    //
-    VkImage image;
-    VkImageLayout imageLayout;
-    //
-    VkMemoryAllocateInfo mem_alloc;
-    VkDeviceMemory mem;
-    VkImageView view;
-    CRUINT32 tex_width, tex_height;
-}texture_object;
-
-VKAPI_ATTR VkBool32 VKAPI_CALL
-dbgFunc(
-    VkFlags msgFlags, VkDebugReportObjectTypeEXT objType,
-    uint64_t srcObject, size_t location, int32_t msgCode,
-    const char *pLayerPrefix, const char *pMsg, void *pUserData
-)
-{
-    char *message = (char *)CRAlloc(NULL, strlen(pMsg) + 100);
-
-    if (msgFlags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
-    {
-        sprintf(message, "ERROR: [%s] Code %d : %s", pLayerPrefix, msgCode, pMsg);
-    }
-    else if (msgFlags & VK_DEBUG_REPORT_WARNING_BIT_EXT)
-    {
-        // We know that we're submitting queues without fences, ignore this
-        // warning
-        if (strstr(pMsg, "vkQueueSubmit parameter, VkFence fence, is null pointer"))
-        {
-            return VK_FALSE;
-        }
-        sprintf(message, "WARNING: [%s] Code %d : %s", pLayerPrefix, msgCode, pMsg);
-    }
-    else
-    {
-        return VK_FALSE;
-    }
-
-    CRPrint(CR_TC_RED, "%s", message);
-    CRAlloc(message, 0);
-
-    /*
-     * false indicates that layer should not bail-out of an
-     * API call that had validation failures. This may mean that the
-     * app dies inside the driver due to invalid parameter(s).
-     * That's what would happen without validation layers, so we'll
-     * keep that behavior here.
-     */
-    return VK_FALSE;
-}
-
-typedef struct{
-    VkImage image;
-    VkCommandBuffer cmd;
-    VkImageView view;
-}SwapchainBuffers;
-
-typedef struct vk_inner{
-    #ifdef CR_WINDOWS
-    HINSTANCE hInst;
-    HWND window;
-    #elif defined CR_LINUIX
-    #endif
-    VkSurfaceKHR surface;
-    CRBOOL inited;
-    CRBOOL using_staging_buffer;
-    //
-    VkInstance inst;
-    VkPhysicalDevice gpu;
-    VkDevice device;
-    VkQueue queue;
-    CRUINT32 graphics_queue_node_index;
-    VkPhysicalDeviceProperties gpu_props;
-    VkQueueFamilyProperties *queue_props;
-    VkPhysicalDeviceMemoryProperties memory_properties;
-    //
-    CRUINT32 enabled_extension_count;
-    CRUINT32 enabled_layer_count;
-    char* extension_names[64];
-    char* device_validation_layers[64];
-    //
-    CRUINT32 width, height;
-    VkFormat format;
-    VkColorSpaceKHR color_space;
-    //
-    PFN_vkGetPhysicalDeviceSurfaceSupportKHR fpGetPhysicalDeviceSurfaceSupportKHR;
-    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR fpGetPhysicalDeviceSurfaceCapabilitiesKHR;
-    PFN_vkGetPhysicalDeviceSurfaceFormatsKHR fpGetPhysicalDeviceSurfaceFormatsKHR;
-    PFN_vkGetPhysicalDeviceSurfacePresentModesKHR fpGetPhysicalDeviceSurfacePresentModesKHR;
-    PFN_vkCreateSwapchainKHR fpCreateSwapchainKHR;
-    PFN_vkDestroySwapchainKHR fpDestroySwapchainKHR;
-    PFN_vkGetSwapchainImagesKHR fpGetSwapchainImagesKHR;
-    PFN_vkAcquireNextImageKHR fpAcquireNextImageKHR;
-    PFN_vkQueuePresentKHR fpQueuePresentKHR;
-    CRUINT32 swapchainImageCount;
-    VkSwapchainKHR swapchain;
-    SwapchainBuffers *buffers;
-    //
-    VkCommandPool cmd_pool;
-    struct{
-        VkFormat format;
-        VkImage image;
-        VkMemoryAllocateInfo mem_alloc;
-        VkDeviceMemory mem;
-        VkImageView view;
-    }depth;
-    //
-    texture_object *pTextures;
-    struct{
-        VkBuffer buf;
-        VkMemoryAllocateInfo mem_alloc;
-        VkDeviceMemory mem;
-        VkDescriptorBufferInfo buffer_info;
-    }uniform_data;
-    //
-    VkCommandBuffer cmd;
-    VkPipelineLayout pipeline_layout;
-    VkDescriptorSetLayout desc_layout;
-    VkPipelineCache pipelineCache;
-    VkRenderPass render_pass;
-    VkPipeline pipeline;
-    //
-    VkShaderModule vert_shader_module;
-    VkShaderModule frag_shader_module;
-    //
-    VkDescriptorPool desc_pool;
-    VkDescriptorSet desc_set;
-    //
-    VkFramebuffer *frameBuffers;
-    CRUINT32 curFrame;
-    CRUINT32 frameCount;
-    CRBOOL validate;
-    CRBOOL use_break;
-    PFN_vkCreateDebugReportCallbackEXT CreateDebugReportCallback;
-    PFN_vkDestroyDebugReportCallbackEXT DestroyDebugReportCallback;
-    VkDebugReportCallbackEXT msg_callback;
-    PFN_vkDebugReportMessageEXT DebugReportMessage;
-    //
-    CRUINT32 current_buffer;
-    CRUINT32 queue_count;
-}cr_vk_inner;
-
-/**
- * 检查内存特性是否符合
- */
-static CRBOOL _inner_memory_type_from_properties_(cr_vk_inner *pInner, CRUINT32 typeBits, VkFlags requirements_mask, uint32_t *typeIndex)
-{
-    for (uint32_t i = 0; i < 32; i++)
-    {
-        if ((typeBits & 1) == 1)
-        {
-            if ((pInner->memory_properties.memoryTypes[i].propertyFlags & requirements_mask) == requirements_mask)
-            {
-                *typeIndex = i;
-                return CRTRUE;
-            }
-        }
-        typeBits >>= 1;
-    }
-    return CRFALSE;
-}
-
-//用于刷新命令队列
-static void _inner_flush_init_cmd_(cr_vk_inner *pInner)
-{
-    VkResult err;
-
-    if (pInner->cmd == VK_NULL_HANDLE)
-        return;
-
-    err = vkEndCommandBuffer(pInner->cmd);
-    if (err) CR_LOG_ERR("auto", "failed to end command buffer");
-
-    const VkCommandBuffer cmd_bufs[] = {pInner->cmd};
-    VkFence nullFence = VK_NULL_HANDLE;
-    VkSubmitInfo submit_info = {
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .pNext = NULL,
-        .waitSemaphoreCount = 0,
-        .pWaitSemaphores = NULL,
-        .pWaitDstStageMask = NULL,
-        .commandBufferCount = 1,
-        .pCommandBuffers = cmd_bufs,
-        .signalSemaphoreCount = 0,
-        .pSignalSemaphores = NULL
-    };
-
-    err = vkQueueSubmit(pInner->queue, 1, &submit_info, nullFence);
-    if (err) CR_LOG_ERR("auto", "failed to submmit vulkan queue!");
-
-    err = vkQueueWaitIdle(pInner->queue);
-    if (err) CR_LOG_ERR("auto", "wait idle error");
-
-    vkFreeCommandBuffers(pInner->device, pInner->cmd_pool, 1, cmd_bufs);
-    pInner->cmd = VK_NULL_HANDLE;
-}
-
-/*
- * Return 1 (true) if all layer names specified in check_names
- * can be found in given layer properties.
- */
-static CRBOOL _inner_check_layers_(
-    uint32_t check_count, char **check_names,
-    uint32_t layer_count,
-    VkLayerProperties *layers
-)
-{
-    for (uint32_t i = 0; i < check_count; i++) {
-        CRBOOL found = 0;
-        for (uint32_t j = 0; j < layer_count; j++) {
-            if (!strcmp(check_names[i], layers[j].layerName)) {
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            CR_LOG_ERR("auto", "Cannot find layer: %s", check_names[i]);
-            return CRFALSE;
-        }
-    }
-    return CRTRUE;
-}
-
-static void _inner_create_device_(cr_vk_inner *pInner)
-{
-    VkResult err;
-    float queue_priorities[1] = {0.0f};
-    const VkDeviceQueueCreateInfo queue = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .queueFamilyIndex = pInner->graphics_queue_node_index,
-        .queueCount = 1,
-        .pQueuePriorities = queue_priorities
-    };
-    VkDeviceCreateInfo device = {
-        .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .pNext = NULL,
-        .flags = 0,
-        .queueCreateInfoCount = 1,
-        .pQueueCreateInfos = &queue,
-        .enabledLayerCount = pInner->enabled_layer_count,
-        .ppEnabledLayerNames = (const char *const *)((pInner->validate) ? pInner->device_validation_layers : NULL),
-        .enabledExtensionCount = pInner->enabled_extension_count,
-        .ppEnabledExtensionNames = (const char *const *)pInner->extension_names,
-        .pEnabledFeatures = NULL
-    };
-    err = vkCreateDevice(pInner->gpu, &device, NULL, &pInner->device);
-    if (err) CR_LOG_ERR("auto", "failed to create logic device!");
-}
-
-static void _inner_destroy_device_(cr_vk_inner *pInner)
-{
-    vkDestroyDevice(pInner->device, NULL);
-}
-
 static PFN_vkGetDeviceProcAddr g_gdpa = NULL;
-#define GET_DEVICE_PROC_ADDR(dev, entrypoint)                                  \
-    {                                                                          \
-        if (!g_gdpa)                                                           \
-            g_gdpa = (PFN_vkGetDeviceProcAddr)vkGetInstanceProcAddr(           \
-                pInner->inst, "vkGetDeviceProcAddr");                          \
-        pInner->fp##entrypoint =                                               \
-            (PFN_vk##entrypoint)g_gdpa(dev, "vk" #entrypoint);                 \
-        if (pInner->fp##entrypoint == NULL) {                                  \
-            CR_LOG_ERR("auto", "vkGetDeviceProcAddr failed to find vk %s",     \
-             #entrypoint);                                                     \
-        }                                                                      \
-    }
 
 static void _inner_init_swapchain_(
     cr_vk_inner *pInner,
@@ -669,7 +388,7 @@ static void _inner_prepare_descriptor_layout_(cr_vk_inner *pInner)
         [0] = {
             .binding = 0,
             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .descriptorCount = 0,  //shader接收的传入对象数量，现在没有传入任何对象
+            .descriptorCount = 1,  //shader接收的传入对象数量，现在没有传入任何对象
             .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .pImmutableSamplers = NULL
         },
@@ -782,6 +501,7 @@ static VkShaderModule _inner_prepare_shader_(cr_vk_inner *pInner, void* code, CR
     };
     VkResult err = vkCreateShaderModule(pInner->device, &moduleCreateInfo, NULL, &module);
     if (err) CR_LOG_ERR("auto", "failed to create shader module!");
+    *pModule = module;
     return module;
 }
 
@@ -987,7 +707,7 @@ static void _inner_draw_build_cmd_(cr_vk_inner *pInner, VkCommandBuffer cmd_buf)
         .pInheritanceInfo = &cmd_buf_hinfo,
     };
     const VkClearValue clear_values[2] = {
-            [0] = {.color.float32 = {0.2f, 0.2f, 0.2f, 0.2f}},
+            [0] = {.color.float32 = {0.5f, 0.4f, 0.7f, 1.0f}},
             [1] = {.depthStencil = {1.0f, 0}},
     };
     const VkRenderPassBeginInfo rp_begin = {
@@ -1027,7 +747,7 @@ static void _inner_draw_build_cmd_(cr_vk_inner *pInner, VkCommandBuffer cmd_buf)
     scissor.offset.y = 0;
     vkCmdSetScissor(cmd_buf, 0, 1, &scissor);
 
-    vkCmdDraw(cmd_buf, 12 * 3, 1, 0, 0);
+    vkCmdDraw(cmd_buf, 3, 1, 0, 0);
     vkCmdEndRenderPass(cmd_buf);
 
     VkImageMemoryBarrier prePresentBarrier = {
@@ -1139,13 +859,6 @@ cr_vk _inner_create_vk_(
     pInner->width = w;
     pInner->height = h;
     //
-    #ifndef CRVK_NO_DBG
-    pInner->validate = CRTRUE;
-    #else
-    pInner->validate = CRFALSE;
-    #endif
-    pInner->use_break = CRFALSE;
-    //
     VkResult err;
     char *extension_names[64];
     CRUINT32 instance_extension_count = 0;
@@ -1153,24 +866,6 @@ cr_vk _inner_create_vk_(
     CRUINT32 device_validation_layer_count = 0;
     CRUINT32 enabled_extension_count = 0;
     CRUINT32 enabled_layer_count = 0;
-    //
-    char *instance_validation_layers[] ={
-        "VK_LAYER_LUNARG_threading",      "VK_LAYER_LUNARG_mem_tracker",
-        "VK_LAYER_LUNARG_object_tracker", "VK_LAYER_LUNARG_draw_state",
-        "VK_LAYER_LUNARG_param_checker",  "VK_LAYER_LUNARG_swapchain",
-        "VK_LAYER_LUNARG_device_limits",  "VK_LAYER_LUNARG_image",
-        "VK_LAYER_GOOGLE_unique_objects"
-    };
-    pInner->device_validation_layers[0] = "VK_LAYER_LUNARG_threading";
-    pInner->device_validation_layers[1] = "VK_LAYER_LUNARG_mem_tracker";
-    pInner->device_validation_layers[2] = "VK_LAYER_LUNARG_object_tracker";
-    pInner->device_validation_layers[3] = "VK_LAYER_LUNARG_draw_state";
-    pInner->device_validation_layers[4] = "VK_LAYER_LUNARG_param_checker";
-    pInner->device_validation_layers[5] = "VK_LAYER_LUNARG_swapchain";
-    pInner->device_validation_layers[6] = "VK_LAYER_LUNARG_device_limits";
-    pInner->device_validation_layers[7] = "VK_LAYER_LUNARG_image";
-    pInner->device_validation_layers[8] = "VK_LAYER_GOOGLE_unique_objects";
-    device_validation_layer_count = 9;
     //
     CRBOOL validation_found = CRFALSE;
     err = vkEnumerateInstanceLayerProperties(&instance_layer_count, NULL);
@@ -1181,18 +876,8 @@ cr_vk _inner_create_vk_(
         if (!instance_layers) CR_LOG_ERR("auto", "bad alloc");
         err = vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layers);
         if (err) CR_LOG_ERR("auto", "failed to enumerate instance layer properties!");
-        if (pInner->validate)
-        {
-            validation_found = _inner_check_layers_(
-                ARRAY_SIZE(instance_validation_layers),
-                instance_validation_layers, instance_layer_count,
-                instance_layers
-            );
-            enabled_layer_count = ARRAY_SIZE(instance_validation_layers);
-        }
         CRAlloc(instance_layers, 0);
     }
-    if (pInner->validate && !validation_found) CR_LOG_ERR("auto", "failed to find required validation layer!");
     //查看实例扩展
     CRBOOL surfaceExtFound = CRFALSE;
     CRBOOL platformSurfaceExtFound = CRFALSE;
@@ -1228,14 +913,6 @@ cr_vk _inner_create_vk_(
                 extension_names[enabled_extension_count++] = VK_KHR_XLIB_SURFACE_EXTENSION_NAME;
                 #endif
             }
-            if (!strcmp(VK_EXT_DEBUG_REPORT_EXTENSION_NAME, instance_extensions[i].extensionName))
-            {
-                if (pInner->validate)
-                {
-                    extension_names[enabled_extension_count++] =
-                        VK_EXT_DEBUG_REPORT_EXTENSION_NAME;
-                }
-            }
         }
         CRAlloc(instance_extensions, 0);
     }
@@ -1263,7 +940,7 @@ cr_vk _inner_create_vk_(
         .pNext = NULL,
         .pApplicationInfo = &app,
         .enabledLayerCount = enabled_layer_count,
-        .ppEnabledLayerNames = (const char *const *)((pInner->validate) ? instance_validation_layers : NULL),
+        .ppEnabledLayerNames = NULL,
         .enabledExtensionCount = enabled_extension_count,
         .ppEnabledExtensionNames = (const char *const *)extension_names,
     };
@@ -1306,19 +983,8 @@ cr_vk _inner_create_vk_(
         VkLayerProperties *device_layers = CRAlloc(NULL, sizeof(VkLayerProperties) * device_layer_count);
         err = vkEnumerateDeviceLayerProperties(pInner->gpu, &device_layer_count, device_layers);
         if (err) CR_LOG_ERR("auto", "failed to enumerate device layer properties");
-        if (pInner->validate)
-        {
-            validation_found = _inner_check_layers_(
-                device_validation_layer_count,
-                pInner->device_validation_layers,
-                device_layer_count,
-                device_layers
-            );
-            pInner->enabled_layer_count = device_validation_layer_count;
-        }
         CRAlloc(device_layers, 0);
     }
-    if (pInner->validate && !validation_found) CR_LOG_ERR("auto", "failed to find a required validation layer!");
     //
     CRUINT32 device_extension_count = 0;
     CRBOOL swapchainExtFound = 0;
@@ -1341,49 +1007,6 @@ cr_vk _inner_create_vk_(
         CRAlloc(device_extensions, 0);
     }
     if (!swapchainExtFound) CR_LOG_ERR("auto", "failed to find the %s extension!", VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    if (pInner->validate)
-    {
-        pInner->CreateDebugReportCallback = (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(pInner->inst, "vkCreateDebugReportCallbackEXT");
-        pInner->DestroyDebugReportCallback = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(pInner->inst, "vkDestroyDebugReportCallbackEXT");
-        if (!pInner->CreateDebugReportCallback)
-            CR_LOG_ERR("auto", "Unable to find vkCreateDebugReportCallbackEXT");
-        if (!pInner->DestroyDebugReportCallback)
-            CR_LOG_ERR("auto", "Unable to find vkDestroyDebugReportCallbackEXT");
-        pInner->DebugReportMessage = (PFN_vkDebugReportMessageEXT)vkGetInstanceProcAddr(pInner->inst, "vkDebugReportMessageEXT");
-        if (!pInner->DebugReportMessage)
-            CR_LOG_ERR("auto", "Unable to find vkDebugReportMessageEXT");
-             PFN_vkDebugReportCallbackEXT callback;
-        if (!pInner->use_break)
-        {
-            callback = dbgFunc;
-        }
-        else
-        {
-            callback = dbgFunc;
-            // TODO add a break callback defined locally since there is no
-            // longer
-            // one included in the loader
-        }
-        VkDebugReportCallbackCreateInfoEXT dbgCreateInfo;
-        dbgCreateInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
-        dbgCreateInfo.pNext = NULL;
-        dbgCreateInfo.pfnCallback = callback;
-        dbgCreateInfo.pUserData = NULL;
-        dbgCreateInfo.flags =
-            VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
-        err = pInner->CreateDebugReportCallback(pInner->inst, &dbgCreateInfo, NULL, &pInner->msg_callback);
-        switch (err)
-        {
-        case VK_SUCCESS:
-            break;
-        case VK_ERROR_OUT_OF_HOST_MEMORY:
-            CR_LOG_ERR("auto", "CreateDebugReportCallback: out of host memory");
-            break;
-        default:
-            CR_LOG_ERR("auto", "CreateDebugReportCallback: unknown failure");
-            break;
-        }
-    }
     //
     vkGetPhysicalDeviceProperties(pInner->gpu, &pInner->gpu_props);
     vkGetPhysicalDeviceQueueFamilyProperties(pInner->gpu, &pInner->queue_count, NULL);

@@ -68,9 +68,9 @@ typedef struct{
 }texture_object;
 
 typedef struct{
-    VkImage image;
+    VkImage *images;
     VkCommandBuffer cmd;
-    VkImageView view;
+    VkImageView *views;
 }SwapchainBuffers;
 
 typedef struct vk_inner{
@@ -172,3 +172,29 @@ void _inner_search_gpu_(cr_vk_inner *pInner);
  */
 void _inner_create_logical_device_(cr_vk_inner *pInner);
 void _inner_destroy_logical_device_(cr_vk_inner *pInner);
+/**
+ * 创建交换链
+ * 交换链是一个队列，包含一系列用于在屏幕上呈现的图像
+ */
+void _inner_create_swapchain_(
+    cr_vk_inner *pInner,
+#ifdef CR_WINDOWS
+    HWND window,
+#elif defined CR_LINUX
+    Display *dpy,
+    Window win,
+#endif
+    CRUINT32 w, CRUINT32 h
+);
+void _inner_destroy_swapchain_(cr_vk_inner *pInner);
+/**
+ * 创建图像视图
+ */
+void _inner_create_image_view_(cr_vk_inner *pInner);
+void _inner_destroy_image_view_(cr_vk_inner *pInner);
+/**
+ * 创建渲染通道
+ * 定义渲染过程中使用的附件
+ */
+void _inner_create_render_pass_(cr_vk_inner *pInner);
+void _inner_destroy_render_pass_(cr_vk_inner *pInner);

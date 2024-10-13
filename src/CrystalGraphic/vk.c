@@ -46,6 +46,13 @@ cr_vk _inner_create_vk_(
     //
     _inner_create_render_pass_(pInner);
     //
+    _inner_create_frame_buffer_(pInner);
+    //
+    _inner_create_command_pool_buffer_(pInner);
+    //
+    _inner_create_sync_object_(pInner);
+    //
+    pInner->curFrame = 0;
     return pInner;
 }
 
@@ -58,6 +65,12 @@ void _inner_destroy_vk_(cr_vk vk)
         CR_LOG_ERR("auto", "invalid vulkan structure");
         return;
     }
+    //
+    _inner_destroy_sync_object_(pInner);
+    //
+    _inner_destroy_command_pool_buffer_(pInner);
+    //
+    _inner_destroy_frame_buffer_(pInner);
     //
     _inner_destroy_render_pass_(pInner);
     //
@@ -75,5 +88,5 @@ void _inner_destroy_vk_(cr_vk vk)
 
 void _inner_paint_ui_(cr_vk vk)
 {
-    //暂时什么都不执行
+    _crvk_draw_frame_(vk);
 }

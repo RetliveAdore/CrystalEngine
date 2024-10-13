@@ -20,6 +20,8 @@
 #include <vulkan/vulkan_xlib.h>
 #endif
 
+#define MAX_FRAMES_IN_FLIGHT 2
+
 typedef CRLVOID cr_vk;
 
 cr_vk _inner_create_vk_(
@@ -88,9 +90,6 @@ typedef struct vk_inner{
     VkDevice device;
     VkQueue queue;
     CRUINT32 graphics_queue_node_index;
-    VkPhysicalDeviceProperties gpu_props;
-    VkQueueFamilyProperties *queue_props;
-    VkPhysicalDeviceMemoryProperties memory_properties;
     //
     CRUINT32 extension_count;
     CRUINT32 enabled_layer_count;
@@ -101,40 +100,13 @@ typedef struct vk_inner{
     VkFormat format;
     VkColorSpaceKHR color_space;
     //
-    PFN_vkGetPhysicalDeviceSurfaceSupportKHR fpGetPhysicalDeviceSurfaceSupportKHR;
-    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR fpGetPhysicalDeviceSurfaceCapabilitiesKHR;
-    PFN_vkGetPhysicalDeviceSurfaceFormatsKHR fpGetPhysicalDeviceSurfaceFormatsKHR;
-    PFN_vkGetPhysicalDeviceSurfacePresentModesKHR fpGetPhysicalDeviceSurfacePresentModesKHR;
-    PFN_vkCreateSwapchainKHR fpCreateSwapchainKHR;
-    PFN_vkDestroySwapchainKHR fpDestroySwapchainKHR;
-    PFN_vkGetSwapchainImagesKHR fpGetSwapchainImagesKHR;
-    PFN_vkAcquireNextImageKHR fpAcquireNextImageKHR;
-    PFN_vkQueuePresentKHR fpQueuePresentKHR;
     CRUINT32 swapchainImageCount;
     VkSwapchainKHR swapchain;
     SwapchainBuffers *buffers;
     //
     VkCommandPool cmd_pool;
-    struct{
-        VkFormat format;
-        VkImage image;
-        VkMemoryAllocateInfo mem_alloc;
-        VkDeviceMemory mem;
-        VkImageView view;
-    }depth;
+    VkCommandBuffer* cmd_buffer;
     //
-    texture_object *pTextures;
-    struct{
-        VkBuffer buf;
-        VkMemoryAllocateInfo mem_alloc;
-        VkDeviceMemory mem;
-        VkDescriptorBufferInfo buffer_info;
-    }uniform_data;
-    //
-    VkCommandBuffer cmd;
-    VkPipelineLayout pipeline_layout;
-    VkDescriptorSetLayout desc_layout;
-    VkPipelineCache pipelineCache;
     VkRenderPass render_pass;
     VkPipeline pipeline;
     //
@@ -147,13 +119,15 @@ typedef struct vk_inner{
     VkFramebuffer *frameBuffers;
     CRUINT32 curFrame;
     CRUINT32 frameCount;
-    PFN_vkCreateDebugReportCallbackEXT CreateDebugReportCallback;
-    PFN_vkDestroyDebugReportCallbackEXT DestroyDebugReportCallback;
     VkDebugReportCallbackEXT msg_callback;
-    PFN_vkDebugReportMessageEXT DebugReportMessage;
     //
     CRUINT32 current_buffer;
     CRUINT32 queue_count;
+    //信号量
+    VkSemaphore* available_semaphores;
+    VkSemaphore* finished_semaphores;
+    VkFence* in_flight_fences;
+    VkFence* image_in_flight;
 }cr_vk_inner;
 
 //utility functions, for init
@@ -198,3 +172,24 @@ void _inner_destroy_image_view_(cr_vk_inner *pInner);
  */
 void _inner_create_render_pass_(cr_vk_inner *pInner);
 void _inner_destroy_render_pass_(cr_vk_inner *pInner);
+/**
+ * 创建帧缓冲
+ */
+void _inner_create_frame_buffer_(cr_vk_inner *pInner);
+void _inner_destroy_frame_buffer_(cr_vk_inner *pInner);
+/**
+ * 创建命令池以及命令缓冲
+ * 命令池存储要执行的绘制命令
+ */
+void _inner_create_command_pool_buffer_(cr_vk_inner *pInner);
+void _inner_destroy_command_pool_buffer_(cr_vk_inner *pInner);
+/**
+ * 
+ */
+void _inner_create_sync_object_(cr_vk_inner* pInner);
+void _inner_destroy_sync_object_(cr_vk_inner* pInner);
+
+/**
+ * 绘制一帧图像
+ */
+void _crvk_draw_frame_(cr_vk vk);

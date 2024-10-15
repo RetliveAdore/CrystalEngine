@@ -116,10 +116,13 @@ void _inner_search_gpu_(cr_vk_inner *pInner)
         if (_inner_check_gpu_suitable_(i, pDevices[i]))
         {
             pInner->gpu = pDevices[i];
-            break;
+            goto Succeed;
         }
     }
+    CR_LOG_WAR("auto", "failed to find a suitable gpu");
+    pInner->gpu = pDevices[0];
     //
+Succeed:
     if (pDevices) CRAlloc(pDevices, 0);
 }
 
@@ -149,6 +152,7 @@ void _inner_create_logical_device_(cr_vk_inner *pInner)
     }
     else
         createInfo.enabledLayerCount = 0;
+    CR_LOG_DBG("auto", "logical");
     if (vkCreateDevice(pInner->gpu, &createInfo, NULL, &pInner->device) != VK_SUCCESS)
         CR_LOG_ERR("auto", "failed to create logical device");
     else CR_LOG_DBG("auto", "create logical device succeed");
@@ -182,6 +186,15 @@ void _inner_create_swapchain_(
         return;
     }
 #elif defined CR_LINUX
+    VkXlibSurfaceCreateInfoKHR surfaceInfo = {0};
+    surfaceInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+    surfaceInfo.dpy = dpy;
+    surfaceInfo.window = win;
+    if (vkCreateXlibSurfaceKHR(pInner->instance, &surfaceInfo, NULL, &pInner->surface) != VK_SUCCESS)
+    {
+        CR_LOG_ERR("auto", "failed to create xlib surface!");
+        return;
+    }
 #endif
     CR_LOG_DBG("auto", "create surface succeed");
     //然后枚举显卡队列族特性
@@ -250,7 +263,7 @@ Succeed_2:
     else CR_LOG_DBG("auto", "create swapchain succeed");
     //确定图像视图的数量
     pInner->swapchainImageCount = capabilities.minImageCount + 1;
-    if (pInner->swapchainImageCount > capabilities.maxImageCount)
+    if (pInner->swapchainImageCount > capabilities.maxImageCount && capabilities.maxImageCount > 0)
         pInner->swapchainImageCount = capabilities.maxImageCount;
     CR_LOG_DBG("auto", "swapchain image count: %d", pInner->swapchainImageCount);
     //获取图像队列

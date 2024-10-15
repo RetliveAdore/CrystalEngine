@@ -39,7 +39,7 @@ cr_vk _inner_create_vk_(
     #ifdef CR_WINDOWS
     _inner_create_swapchain_(pInner, window, w, h);
     #elif defined CR_LINUX
-
+    _inner_create_swapchain_(pInner, dpy, win,w, h);
     #endif
     //
     _inner_create_image_view_(pInner);

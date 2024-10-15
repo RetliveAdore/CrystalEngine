@@ -90,6 +90,7 @@ typedef struct vk_inner{
     VkDevice device;
     VkQueue queue;
     CRUINT32 graphics_queue_node_index;
+    CRUINT32 present_queue_node_index;
     //
     CRUINT32 extension_count;
     CRUINT32 enabled_layer_count;
